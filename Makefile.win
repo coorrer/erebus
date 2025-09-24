@@ -5,13 +5,14 @@ BINARY_NAME := $(SERVICE_NAME).exe
 .PHONY: all
 all: build
 
-# Windows 构建 - 唯一支持的功能
+# Windows 构建 - 使用 Windows 兼容的命令
 .PHONY: build
 build:
-	@echo "Building $(SERVICE_NAME) $(VERSION) for Windows..."
-	@set CGO_ENABLED=$(CGO_ENABLED) && $(GO_BUILD) -ldflags="$(GO_LDFLAGS)" -o $(BINARY_NAME) .
+	@echo "Building $(SERVICE_NAME) v$(VERSION) for Windows..."
+	@set CGO_ENABLED=$(CGO_ENABLED)
+	$(GO_BUILD) $(GO_VENDOR) -ldflags="$(GO_LDFLAGS)" -o $(BINARY_NAME) .
 
-# Windows 清理
+# Windows 清理 - 使用 Windows 命令
 .PHONY: clean
 clean:
 	@echo "Cleaning build artifacts..."
@@ -21,14 +22,39 @@ clean:
 	@if exist coverage.out del /Q coverage.out
 	@if exist coverage.html del /Q coverage.html
 
-# 其他所有目标在 Windows 上都不支持
-.PHONY: install test coverage cross-build checksum version help
+# 显示版本信息 - Windows 兼容
+.PHONY: version
+version:
+	@echo Version:    $(VERSION)
+	@echo Commit:     $(COMMIT)
+	@echo Build Time: $(BUILD_TIME)
+	@echo Go Version: $(GO_VERSION)
+
+# 显示帮助信息 - Windows 兼容
+.PHONY: help
+help:
+	@echo "Makefile for $(SERVICE_NAME) v$(VERSION) (Windows)"
+	@echo.
+	@echo "Available targets:"
+	@echo.
+	@echo "  make           - Build project"
+	@echo "  make build     - Build project"
+	@echo "  make clean     - Clean build artifacts"
+	@echo "  make version   - Show version info"
+	@echo "  make help      - Show this help"
+	@echo.
+	@echo "Note: Only basic build functionality is available on Windows"
+
+# 其他所有目标在 Windows 上都不支持 - 使用 Windows 错误消息
+.PHONY: install test coverage cross-build checksum
 .PHONY: system-install generate-service start stop restart status logs
 .PHONY: system-uninstall update-config install-example-config config-status
-.PHONY: release-dry-run release snapshot
-install test coverage cross-build checksum version help \
+.PHONY: release-dry-run release snapshot enable disable
+
+install test coverage cross-build checksum \
 system-install generate-service start stop restart status logs \
 system-uninstall update-config install-example-config config-status \
-release-dry-run release snapshot:
-	@echo "Error: This target is not supported on Windows"
+release-dry-run release snapshot enable disable:
+	@echo Error: This target is not supported on Windows
+	@echo Available targets: build, clean, version, help
 	@exit 1

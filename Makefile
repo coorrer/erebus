@@ -12,6 +12,7 @@ GO_VERSION := $(shell go version | cut -d' ' -f3)
 # Go 配置
 GO := go
 GO_BUILD := $(GO) build
+GO_VENDOR := -mod vendor
 GO_TEST := $(GO) test
 GO_LDFLAGS := -w -s \
     -X main.version=$(VERSION) \

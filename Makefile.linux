@@ -9,7 +9,7 @@ all: build
 .PHONY: build
 build:
 	@echo "Building $(SERVICE_NAME) $(VERSION) for Linux..."
-	CGO_ENABLED=$(CGO_ENABLED) $(GO_BUILD) -ldflags="$(GO_LDFLAGS)" -o $(BINARY_NAME) .
+	CGO_ENABLED=$(CGO_ENABLED) $(GO_BUILD) $(GO_VENDOR) -ldflags="$(GO_LDFLAGS)" -o $(BINARY_NAME) .
 
 # 安装到 GOPATH/bin
 .PHONY: install
