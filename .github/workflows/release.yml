@@ -110,7 +110,7 @@ jobs:
           
           运行方式:
             ./$BINARY
-          EOF
+EOF
 
 - name: Create archive
   run: |
