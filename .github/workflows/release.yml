@@ -84,7 +84,8 @@ jobs:
           }
           Get-Item $binary
 
-      - name: Create package directory
+      - name: Create package directory (Linux/macOS)
+        if: matrix.platform.goos != 'windows'
         run: |
           PACKAGE_DIR="${{ env.APP_NAME }}_${{ github.ref_name }}_${{ matrix.platform.name }}"
           mkdir -p $PACKAGE_DIR/${{ env.CONFIG_DIR }}
@@ -108,6 +109,35 @@ jobs:
           运行方式:
           ./$BINARY
           EOF
+
+      - name: Create package directory (Windows)
+        if: matrix.platform.goos == 'windows'
+        run: |
+          $packageDir = "${{ env.APP_NAME }}_${{ github.ref_name }}_${{ matrix.platform.name }}"
+          $binary = "${{ env.APP_NAME }}${{ matrix.platform.binary_ext || '' }}"
+          $configDir = "${{ env.CONFIG_DIR }}"
+          
+          # 创建目录
+          New-Item -ItemType Directory -Path "$packageDir\$configDir" -Force | Out-Null
+          
+          # 复制二进制文件
+          Copy-Item -Path $binary -Destination "$packageDir\" -Force
+          
+          # 复制配置文件
+          Copy-Item -Path "$configDir\*" -Destination "$packageDir\$configDir\" -Recurse -Force
+          
+          # 创建说明文件 (使用PowerShell语法)
+          $readmeContent = @"
+          Erebus ${{ github.ref_name }} - ${{ matrix.platform.name }}
+          
+          包含文件:
+          - $binary: 主程序
+          - $configDir/: 配置文件目录
+          
+          运行方式:
+          .\$binary
+          "@
+          Set-Content -Path "$packageDir\README.txt" -Value $readmeContent -Encoding utf8
 
       - name: Create archive
         run: |
@@ -199,3 +229,4 @@ jobs:
           asset_path: ./artifacts/${{ env.APP_NAME }}_${{ github.ref_name }}_${{ matrix.platform.name }}.${{ matrix.platform.archive_format }}
           asset_name: ${{ env.APP_NAME }}_${{ github.ref_name }}_${{ matrix.platform.name }}.${{ matrix.platform.archive_format }}
           asset_content_type: application/octet-stream
+    
