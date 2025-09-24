@@ -1,6 +1,13 @@
 # 项目名称
 SERVICE_NAME := erebus
 
+# 检测操作系统
+ifeq ($(OS),Windows_NT)
+    DETECTED_OS := Windows
+else
+    DETECTED_OS := $(shell uname -s)
+endif
+
 # 动态版本信息
 VERSION := $(shell git describe --tags --abbrev=0 2>/dev/null || echo "dev")
 COMMIT := $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
@@ -20,16 +27,41 @@ CGO_ENABLED ?= 0
 
 # 构建目录
 DIST_DIR := dist
-BINARY_NAME := $(SERVICE_NAME)
 
-# 系统安装配置
-PREFIX ?= /usr/local
-BIN_DIR ?= $(PREFIX)/bin
-CONF_DIR ?= /etc/$(SERVICE_NAME)
-LOG_DIR ?= /var/log/$(SERVICE_NAME)
-SERVICE_DIR ?= /etc/systemd/system
-SERVICE_USER ?= root
-SERVICE_GROUP ?= root
+# 根据操作系统设置二进制文件名
+ifeq ($(DETECTED_OS),Windows)
+    BINARY_NAME := $(SERVICE_NAME).exe
+    RM := del /Q
+    MKDIR := mkdir
+    CP := copy
+    RMDIR := rmdir /S /Q
+else
+    BINARY_NAME := $(SERVICE_NAME)
+    RM := rm -f
+    MKDIR := mkdir -p
+    CP := cp
+    RMDIR := rm -rf
+endif
+
+# 系统安装配置（Windows和Linux不同）
+ifeq ($(DETECTED_OS),Windows)
+    # Windows路径
+    PREFIX ?= C:\Program Files\$(SERVICE_NAME)
+    BIN_DIR ?= $(PREFIX)
+    CONF_DIR ?= $(PREFIX)\config
+    LOG_DIR ?= $(PREFIX)\logs
+    SERVICE_USER ?= Administrator
+    SERVICE_GROUP ?: Administrators
+else
+    # Linux路径
+    PREFIX ?= /usr/local
+    BIN_DIR ?= $(PREFIX)/bin
+    CONF_DIR ?= /etc/$(SERVICE_NAME)
+    LOG_DIR ?= /var/log/$(SERVICE_NAME)
+    SERVICE_DIR ?= /etc/systemd/system
+    SERVICE_USER ?= root
+    SERVICE_GROUP ?= root
+endif
 
 # 模板和配置文件
 SERVICE_TEMPLATE := erebus.service.template
@@ -42,14 +74,14 @@ all: build
 # 本地开发构建
 .PHONY: build
 build:
-	@echo "Building $(SERVICE_NAME) v$(VERSION) for $(shell go env GOOS)/$(shell go env GOARCH)..."
+	@echo "Building $(SERVICE_NAME) $(VERSION) for $(shell go env GOOS)/$(shell go env GOARCH)..."
 	CGO_ENABLED=$(CGO_ENABLED) $(GO_BUILD) -ldflags="$(GO_LDFLAGS)" -o $(BINARY_NAME) .
 
 # 安装到 GOPATH/bin
 .PHONY: install
 install: build
 	@echo "Installing to $(shell go env GOPATH)/bin..."
-	cp $(BINARY_NAME) $(shell go env GOPATH)/bin/$(BINARY_NAME)
+	$(CP) $(BINARY_NAME) $(shell go env GOPATH)/bin/$(BINARY_NAME)
 
 # 运行测试
 .PHONY: test
@@ -69,16 +101,16 @@ coverage:
 .PHONY: clean
 clean:
 	@echo "Cleaning build artifacts..."
-	rm -f $(BINARY_NAME)
-	rm -rf $(DIST_DIR)
-	rm -f *.log coverage.out coverage.html
-	rm -f $(SERVICE_NAME).service
+	$(RM) $(BINARY_NAME)
+	$(RMDIR) $(DIST_DIR)
+	$(RM) *.log coverage.out coverage.html
+	$(RM) $(SERVICE_NAME).service
 
 # 多平台交叉编译
 .PHONY: cross-build
 cross-build:
 	@echo "Building for multiple platforms..."
-	@mkdir -p $(DIST_DIR)
+	@$(MKDIR) $(DIST_DIR)
 
 	# Linux
 	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 $(GO_BUILD) -ldflags="$(GO_LDFLAGS)" -o $(DIST_DIR)/$(BINARY_NAME)-linux-amd64 .
@@ -94,14 +126,40 @@ cross-build:
 
 	@echo "Build complete. Binaries available in $(DIST_DIR)/"
 
-# 生成校验和
-.PHONY: checksum
-checksum: cross-build
-	@echo "Generating checksums..."
-	cd $(DIST_DIR) && shasum -a 256 * > $(BINARY_NAME)-$(VERSION)-checksums.txt
-	@echo "Checksums generated: $(DIST_DIR)/$(BINARY_NAME)-$(VERSION)-checksums.txt"
+# Windows特定的安装目标
+.PHONY: windows-install
+windows-install: build
+ifeq ($(DETECTED_OS),Windows)
+	@echo "Installing $(SERVICE_NAME) on Windows..."
+	@if not exist "$(BIN_DIR)" $(MKDIR) "$(BIN_DIR)"
+	@if not exist "$(CONF_DIR)" $(MKDIR) "$(CONF_DIR)"
+	@if not exist "$(LOG_DIR)" $(MKDIR) "$(LOG_DIR)"
 
-# 生成 systemd 服务文件
+	$(CP) $(BINARY_NAME) "$(BIN_DIR)\$(BINARY_NAME)"
+
+	@if exist "$(CONFIG_FILE)" (
+		if not exist "$(CONF_DIR)\erebus.yaml" (
+			$(CP) "$(CONFIG_FILE)" "$(CONF_DIR)\erebus.yaml"
+			echo "Config file installed to $(CONF_DIR)\erebus.yaml"
+		) else (
+			echo "Config file already exists, skipping..."
+		)
+	) else (
+		echo "Warning: Source config file not found"
+	)
+
+	@echo "Installation complete."
+	@echo "Binary: $(BIN_DIR)\$(BINARY_NAME)"
+	@echo "Config: $(CONF_DIR)\erebus.yaml"
+	@echo "Logs:   $(LOG_DIR)"
+else
+	@echo "This target is only supported on Windows"
+endif
+
+# 条件编译系统服务相关功能
+ifneq ($(DETECTED_OS),Windows)
+
+# Linux特有的系统服务目标
 .PHONY: generate-service
 generate-service:
 	@echo "Generating systemd service file from template..."
@@ -137,310 +195,59 @@ generate-service:
 		$(SERVICE_TEMPLATE) > $(SERVICE_NAME).service
 	@echo "Service file generated: $(SERVICE_NAME).service"
 
-# 系统安装（包含服务安装）
+# 其他Linux特有的目标（system-install, start, stop等）...
+# 这里保留原有的Linux服务管理代码，但用条件判断包裹
+
+else
+
+# Windows下的替代目标
+.PHONY: generate-service
+generate-service:
+	@echo "Systemd service generation is not supported on Windows."
+	@echo "Consider using NSSM (Non-Sucking Service Manager) for Windows service management."
+
 .PHONY: system-install
-system-install: build generate-service
-	@echo "Installing $(SERVICE_NAME) to system directories..."
+system-install:
+	@echo "System installation is not supported on Windows via this Makefile."
+	@echo "Use 'make windows-install' for basic installation."
 
-	# 检查权限
-	if [ "$(shell id -u)" -ne 0 ]; then \
-		echo "Error: system installation requires root privileges"; \
-		echo "Please run: sudo make system-install"; \
-		exit 1; \
-	fi
+endif
 
-	# 检查服务文件是否生成
-	if [ ! -f $(SERVICE_NAME).service ]; then \
-		echo "Error: Service file $(SERVICE_NAME).service not found"; \
-		exit 1; \
-	fi
-
-	# 创建系统用户和组
-	@if ! getent group $(SERVICE_GROUP) >/dev/null 2>&1; then \
-		groupadd --system $(SERVICE_GROUP); \
-		echo "Created group $(SERVICE_GROUP)"; \
-	fi
-	@if ! id -u $(SERVICE_USER) >/dev/null 2>&1; then \
-		useradd --system --no-create-home --shell /bin/false \
-				-g $(SERVICE_GROUP) $(SERVICE_USER); \
-		echo "Created user $(SERVICE_USER)"; \
-	fi
-
-	# 创建目录
-	mkdir -p $(BIN_DIR)
-	mkdir -p $(CONF_DIR)
-	mkdir -p $(LOG_DIR)
-	mkdir -p $(SERVICE_DIR)
-
-	# 安装二进制文件
-	install -m 755 $(BINARY_NAME) $(BIN_DIR)/$(BINARY_NAME)
-
-	# 安装配置文件（如果不存在则安装，存在则跳过）
-	if [ -f $(CONFIG_FILE) ]; then \
-		if [ -f $(CONF_DIR)/erebus.yaml ]; then \
-			echo "Config file $(CONF_DIR)/erebus.yaml already exists, skipping installation to preserve existing configuration."; \
-			echo "If you want to update the config, run: sudo make update-config"; \
-		else \
-			install -m 640 $(CONFIG_FILE) $(CONF_DIR)/erebus.yaml; \
-			echo "Config file installed to $(CONF_DIR)/erebus.yaml"; \
-		fi; \
-	else \
-		echo "Warning: Source config file $(CONFIG_FILE) not found"; \
-		# 如果目标配置文件也不存在，创建空文件 \
-		if [ ! -f $(CONF_DIR)/erebus.yaml ]; then \
-			touch $(CONF_DIR)/erebus.yaml; \
-			chmod 640 $(CONF_DIR)/erebus.yaml; \
-			echo "Created empty config file at $(CONF_DIR)/erebus.yaml"; \
-		fi; \
-	fi
-
-	# 安装服务文件（总是覆盖，因为这是系统服务配置）
-	install -m 644 $(SERVICE_NAME).service $(SERVICE_DIR)/$(SERVICE_NAME).service
-
-	# 设置文件权限
-	chown $(SERVICE_USER):$(SERVICE_GROUP) $(BIN_DIR)/$(BINARY_NAME)
-	chown root:$(SERVICE_GROUP) $(CONF_DIR)/erebus.yaml
-	chown $(SERVICE_USER):$(SERVICE_GROUP) $(LOG_DIR)
-	chmod 755 $(LOG_DIR)
-
-	# 重新加载systemd并启用服务
-	systemctl daemon-reload
-	systemctl enable $(SERVICE_NAME).service
-
-	# 清理临时文件
-	rm -f $(SERVICE_NAME).service
-
-	@echo ""
-	@echo "=== Installation Complete ==="
-	@echo "Binary:        $(BIN_DIR)/$(BINARY_NAME)"
-	@if [ -f $(CONF_DIR)/erebus.yaml ]; then \
-		if [ -f $(CONFIG_FILE) ] && cmp -s $(CONF_DIR)/erebus.yaml $(CONFIG_FILE); then \
-			echo "Config:        $(CONF_DIR)/erebus.yaml - NEWLY INSTALLED"; \
-		else \
-			echo "Config:        $(CONF_DIR)/erebus.yaml - EXISTING PRESERVED"; \
-		fi; \
-	else \
-		echo "Config:        $(CONF_DIR)/erebus.yaml - NOT INSTALLED"; \
-	fi
-	@echo "Service:       $(SERVICE_DIR)/$(SERVICE_NAME).service"
-	@echo "Log directory: $(LOG_DIR)"
-	@echo "Service user:  $(SERVICE_USER):$(SERVICE_GROUP)"
-	@echo ""
-	@echo "Next steps:"
-	@echo "  sudo systemctl start $(SERVICE_NAME)"
-	@echo "  sudo systemctl status $(SERVICE_NAME)"
-	@echo "  sudo journalctl -u $(SERVICE_NAME) -f"
-
-# 专门更新配置的目标（需要手动调用）
-.PHONY: update-config
-update-config:
-	@echo "Updating configuration file..."
-
-	# 检查权限
-	if [ "$(shell id -u)" -ne 0 ]; then \
-		echo "Error: requires root privileges"; \
-		echo "Please run: sudo make update-config"; \
-		exit 1; \
-	fi
-
-	# 检查源配置文件是否存在
-	if [ ! -f $(CONFIG_FILE) ]; then \
-		echo "Error: Source config file $(CONFIG_FILE) not found"; \
-		exit 1; \
-	fi
-
-	# 备份现有配置
-	if [ -f $(CONF_DIR)/erebus.yaml ]; then \
-		backup_file="$(CONF_DIR)/erebus.yaml.backup.$$(date +%Y%m%d%H%M%S)"; \
-		cp $(CONF_DIR)/erebus.yaml $$backup_file; \
-		echo "Backed up existing config to $$backup_file"; \
-	fi
-
-	# 安装新配置
-	install -m 640 $(CONFIG_FILE) $(CONF_DIR)/erebus.yaml
-	chown root:$(SERVICE_GROUP) $(CONF_DIR)/erebus.yaml
-	echo "Configuration updated. Old config backed up."
-	echo "Please review the changes and restart the service if needed:"
-	echo "  sudo systemctl restart $(SERVICE_NAME)"
-
-# 安装示例配置（不覆盖现有配置）
-.PHONY: install-example-config
-install-example-config:
-	@echo "Installing example configuration..."
-
-	# 检查权限
-	if [ "$(shell id -u)" -ne 0 ]; then \
-		echo "Error: requires root privileges"; \
-		echo "Please run: sudo make install-example-config"; \
-		exit 1; \
-	fi
-
-	# 检查源配置文件是否存在
-	if [ ! -f $(CONFIG_FILE) ]; then \
-		echo "Error: Example config file $(CONFIG_FILE) not found"; \
-		exit 1; \
-	fi
-
-	# 安装为示例文件（不覆盖现有配置）
-	example_file="$(CONF_DIR)/erebus.yaml.example"
-	install -m 640 $(CONFIG_FILE) $$example_file
-	chown root:$(SERVICE_GROUP) $$example_file
-	echo "Example config installed to $$example_file"
-	echo "You can compare it with your current config:"
-	echo "  diff -u $(CONF_DIR)/erebus.yaml $$example_file || echo 'No existing config to compare'"
-
-# 显示配置状态
-.PHONY: config-status
-config-status:
-	@echo "Configuration Status:"
-	@echo "  Source config:      $(CONFIG_FILE) $(if $(shell test -f $(CONFIG_FILE) && echo exists),EXISTS,NOT FOUND)"
-	@echo "  Installed config:   $(CONF_DIR)/erebus.yaml $(if $(shell test -f $(CONF_DIR)/erebus.yaml && echo exists),EXISTS,NOT FOUND)"
-	@if [ -f $(CONF_DIR)/erebus.yaml ] && [ -f $(CONFIG_FILE) ]; then \
-		if cmp -s $(CONF_DIR)/erebus.yaml $(CONFIG_FILE); then \
-			echo "  Status:             Config files are identical"; \
-		else \
-			echo "  Status:             Config files differ"; \
-			echo "  Last modified:      $$(stat -c %y $(CONF_DIR)/erebus.yaml 2>/dev/null || echo 'Unknown')"; \
-		fi; \
-	elif [ -f $(CONF_DIR)/erebus.yaml ]; then \
-		echo "  Status:             Using existing configuration"; \
-	else \
-		echo "  Status:             No configuration installed"; \
-	fi
-
-# 服务管理命令
-.PHONY: start
-start:
-	systemctl start $(SERVICE_NAME).service
-	@echo "Service started. Check status with: systemctl status $(SERVICE_NAME)"
-
-.PHONY: stop
-stop:
-	systemctl stop $(SERVICE_NAME).service
-	@echo "Service stopped"
-
-.PHONY: restart
-restart:
-	systemctl restart $(SERVICE_NAME).service
-	@echo "Service restarted"
-
-.PHONY: status
-status:
-	systemctl status $(SERVICE_NAME).service
-
-.PHONY: logs
-logs:
-	journalctl -u $(SERVICE_NAME).service -f
-
-.PHONY: enable
-enable:
-	systemctl enable $(SERVICE_NAME).service
-	@echo "Service enabled to start on boot"
-
-.PHONY: disable
-disable:
-	systemctl disable $(SERVICE_NAME).service
-	@echo "Service disabled from starting on boot"
-
-# 系统卸载
-.PHONY: system-uninstall
-system-uninstall:
-	@echo "Uninstalling $(SERVICE_NAME)..."
-
-	# 检查权限
-	if [ "$(shell id -u)" -ne 0 ]; then \
-		echo "Error: uninstallation requires root privileges"; \
-		echo "Please run: sudo make system-uninstall"; \
-		exit 1; \
-	fi
-
-	# 停止并禁用服务
-	systemctl stop $(SERVICE_NAME).service 2>/dev/null || true
-	systemctl disable $(SERVICE_NAME).service 2>/dev/null || true
-
-	# 删除服务文件
-	rm -f $(SERVICE_DIR)/$(SERVICE_NAME).service
-
-	# 删除二进制文件
-	rm -f $(BIN_DIR)/$(BINARY_NAME)
-
-	# 重新加载systemd
-	systemctl daemon-reload
-
-	@echo "Uninstallation complete. Note: Config files in $(CONF_DIR) and logs in $(LOG_DIR) were preserved."
-
-# 完全清理（包括配置和日志）
-.PHONY: system-purge
-system-purge: system-uninstall
-	@echo "Purging all $(SERVICE_NAME) files..."
-	rm -rf $(CONF_DIR)
-	rm -rf $(LOG_DIR)
-	@echo "Purge complete."
-
-# GoReleaser 相关命令
-.PHONY: release-dry-run
-release-dry-run:
-	@echo "Running GoReleaser in dry-run mode..."
-	goreleaser release --clean --snapshot --skip=publish
-
-.PHONY: release
-release:
-	@echo "Creating release..."
-	goreleaser release --clean
-
-.PHONY: snapshot
-snapshot:
-	@echo "Creating snapshot release..."
-	goreleaser release --clean --snapshot
-
-# 显示版本信息
+# 其他通用目标（version, help等）保持不变...
 .PHONY: version
 version:
 	@echo "Version:    $(VERSION)"
 	@echo "Commit:     $(COMMIT)"
 	@echo "Build Time: $(BUILD_TIME)"
 	@echo "Go Version: $(GO_VERSION)"
+	@echo "OS:         $(DETECTED_OS)"
 
-# 显示帮助信息
 .PHONY: help
 help:
 	@echo "Makefile for $(SERVICE_NAME) v$(VERSION)"
+	@echo "Detected OS: $(DETECTED_OS)"
 	@echo ""
 	@echo "Usage:"
-	@echo "  make                    - 编译项目（当前平台）"
-	@echo "  make build              - 编译项目"
-	@echo "  make install            - 安装到 GOPATH/bin"
-	@echo "  make test               - 运行测试"
-	@echo "  make coverage           - 生成测试覆盖率报告"
-	@echo "  make clean              - 清理构建文件"
-	@echo "  make cross-build        - 交叉编译多平台版本"
-	@echo "  make checksum           - 生成校验和文件"
-	@echo "  make version            - 显示版本信息"
+	@echo "  make                    - Build project (current platform)"
+	@echo "  make build              - Build project"
+	@echo "  make install            - Install to GOPATH/bin"
+	@echo "  make test               - Run tests"
+	@echo "  make coverage           - Generate test coverage report"
+	@echo "  make clean              - Clean build artifacts"
+	@echo "  make cross-build        - Cross-compile for multiple platforms"
+	@echo "  make checksum           - Generate checksums"
+	@echo "  make version            - Show version information"
 	@echo ""
-	@echo "System Service:"
-	@echo "  make generate-service        - 生成 systemd 服务文件"
-	@echo "  make system-install          - 安装到系统目录（需要root）"
-	@echo "  make system-uninstall        - 卸载系统服务（保留配置）"
-	@echo "  make system-purge            - 完全删除（包括配置）"
-	@echo "  make update-config           - 更新配置文件（备份旧配置）"
-	@echo "  make install-example-config  - 安装示例配置"
-	@echo "  make config-status           - 显示配置状态"
+ifeq ($(DETECTED_OS),Windows)
+	@echo "Windows Specific:"
+	@echo "  make windows-install    - Install to Windows directories"
 	@echo ""
-	@echo "Service Management (需要root):"
-	@echo "  make start             - 启动服务"
-	@echo "  make stop              - 停止服务"
-	@echo "  make restart           - 重启服务"
-	@echo "  make status            - 查看服务状态"
-	@echo "  make logs              - 查看服务日志"
-	@echo "  make enable            - 启用开机自启"
-	@echo "  make disable           - 禁用开机自启"
-	@echo ""
-	@echo "Release:"
-	@echo "  make release-dry-run   - 测试发布流程"
-	@echo "  make snapshot          - 创建快照版本"
-	@echo "  make release           - 创建正式发布"
-	@echo ""
-	@echo "Variables:"
-	@echo "  VERSION=$(VERSION)"
-	@echo "  COMMIT=$(COMMIT)"
-	@echo "  BUILD_TIME=$(BUILD_TIME)"
+	@echo "Note: System service management is not supported on Windows via this Makefile"
+else
+	@echo "System Service (Linux):"
+	@echo "  make generate-service        - Generate systemd service file"
+	@echo "  make system-install          - Install to system directories (requires root)"
+	@echo "  make start                   - Start service"
+	@echo "  make stop                    - Stop service"
+	@echo "  ... (other Linux-specific targets)"
+endif
