@@ -101,7 +101,7 @@ jobs:
           
           # 创建说明文件
           $README_CONTENT = @"
-  Erebus ${{ github.ref_name }} - ${{ matrix.platform.name }}
+          Erebus ${{ github.ref_name }} - ${{ matrix.platform.name }}
 
 包含文件:
   - $BINARY: 主程序
