@@ -110,7 +110,7 @@ jobs:
 运行方式:
   ./$BINARY
   "@
-          Set-Content -Path "$PACKAGE_DIR/README.txt" -Value $README_CONTENT
+  Set-Content -Path "$PACKAGE_DIR/README.txt" -Value $README_CONTENT
 
 - name: Create archive
   shell: ${{ matrix.platform.shell }}
