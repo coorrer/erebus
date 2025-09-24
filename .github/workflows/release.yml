@@ -1,5 +1,9 @@
 name: Release Erebus
 
+permissions:
+  contents: write  # 授予 Release 相关权限（创建 Release、上传资产）
+  actions: read    # 可选：读取工作流状态（按需添加）
+
 on:
   push:
     tags:
