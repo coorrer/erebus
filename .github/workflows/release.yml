@@ -61,7 +61,8 @@ jobs:
         run: |
           make
 
-      - name: Verify binary
+      - name: Verify binary (Linux/macOS)
+        if: matrix.platform.goos != 'windows'
         run: |
           BINARY="${{ env.APP_NAME }}${{ matrix.platform.binary_ext || '' }}"
           if [ ! -f "$BINARY" ]; then
@@ -69,11 +70,19 @@ jobs:
             ls -la
             exit 1
           fi
-          # 检查二进制文件类型（Linux/Mac）
-          if [ "${{ matrix.platform.goos }}" != "windows" ]; then
-            file $BINARY
-            chmod +x $BINARY
-          fi
+          file $BINARY
+          chmod +x $BINARY
+
+      - name: Verify binary (Windows)
+        if: matrix.platform.goos == 'windows'
+        run: |
+          $binary = "${{ env.APP_NAME }}${{ matrix.platform.binary_ext || '' }}"
+          if (-not (Test-Path $binary -PathType Leaf)) {
+            Write-Host "Error: Binary $binary not found!"
+            Get-ChildItem
+            exit 1
+          }
+          Get-Item $binary
 
       - name: Create package directory
         run: |
@@ -173,7 +182,7 @@ jobs:
             archive_format: tar.gz
           - name: darwin-arm64
             archive_format: tar.gz
-    
+
     steps:
       - name: Download artifact
         uses: actions/download-artifact@v4
@@ -190,4 +199,3 @@ jobs:
           asset_path: ./artifacts/${{ env.APP_NAME }}_${{ github.ref_name }}_${{ matrix.platform.name }}.${{ matrix.platform.archive_format }}
           asset_name: ${{ env.APP_NAME }}_${{ github.ref_name }}_${{ matrix.platform.name }}.${{ matrix.platform.archive_format }}
           asset_content_type: application/octet-stream
-
