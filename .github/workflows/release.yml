@@ -104,13 +104,13 @@ jobs:
           cat > $PACKAGE_DIR/README.txt << EOF
           Erebus ${{ github.ref_name }} - ${{ matrix.platform.name }}
 
-包含文件:
-  - $BINARY: 主程序
-  - ${{ env.CONFIG_DIR }}/: 配置文件目录
-
-运行方式:
-  ./$BINARY
-  EOF
+          包含文件:
+            - $BINARY: 主程序
+            - ${{ env.CONFIG_DIR }}/: 配置文件目录
+          
+          运行方式:
+            ./$BINARY
+          EOF
 
 - name: Create archive
   run: |
