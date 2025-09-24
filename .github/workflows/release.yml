@@ -55,7 +55,7 @@ jobs:
     outputs:
       target_tag: ${{ steps.get_tag.outputs.tag }}
     steps:
-      # 关键修复：为Windows和非Windows平台分别设置标签获取逻辑
+      # 1. 标签获取：完全分离Windows和Unix逻辑
       - name: Get target tag (Linux/macOS)
         if: matrix.platform.goos != 'windows'
         id: get_tag_unix
@@ -70,22 +70,32 @@ jobs:
         if: matrix.platform.goos == 'windows'
         id: get_tag_win
         run: |
-          # PowerShell语法：使用if (...)和-eq比较运算符
+          # PowerShell原生语法
           if ("${{ github.event_name }}" -eq "push") {
-            echo "tag=${{ github.ref_name }}" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+            Write-Output "tag=${{ github.ref_name }}" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
           } else {
-            echo "tag=${{ github.event.inputs.tag_name }}" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+            Write-Output "tag=${{ github.event.inputs.tag_name }}" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
           }
 
-      # 统一标签输出（无论Windows还是Unix，都从对应的步骤获取）
-      - name: Set unified tag output
+      # 2. 统一标签输出：用PowerShell兼容的方式
+      - name: Set unified tag output (Linux/macOS)
+        if: matrix.platform.goos != 'windows'
+        id: get_tag_unix_final
+        run: |
+          echo "tag=${{ steps.get_tag_unix.outputs.tag }}" >> $GITHUB_OUTPUT
+
+      - name: Set unified tag output (Windows)
+        if: matrix.platform.goos == 'windows'
+        id: get_tag_win_final
+        run: |
+          Write-Output "tag=${{ steps.get_tag_win.outputs.tag }}" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+      # 最终统一的标签输出变量
+      - name: Combine tag output
         id: get_tag
         run: |
-          if [ "${{ matrix.platform.goos }}" = "windows" ]; then
-            echo "tag=${{ steps.get_tag_win.outputs.tag }}" >> $GITHUB_OUTPUT
-          else
-            echo "tag=${{ steps.get_tag_unix.outputs.tag }}" >> $GITHUB_OUTPUT
-          fi
+          # 完全避免跨平台条件判断，直接从对应步骤获取
+          echo "tag=${{ steps.get_tag_unix_final.outputs.tag || steps.get_tag_win_final.outputs.tag }}" >> $GITHUB_OUTPUT
 
       - name: Checkout code
         uses: actions/checkout@v4
@@ -107,6 +117,7 @@ jobs:
           CGO_ENABLED: 0
         run: make
 
+      # 3. 二进制验证：完全分离平台逻辑
       - name: Verify binary (Linux/macOS)
         if: matrix.platform.goos != 'windows'
         run: |
@@ -130,6 +141,7 @@ jobs:
           }
           Get-Item $binary
 
+      # 4. 创建打包目录：完全分离平台逻辑
       - name: Create package (Linux/macOS)
         if: matrix.platform.goos != 'windows'
         run: |
@@ -171,6 +183,7 @@ jobs:
           "@
           Set-Content -Path "$packageDir\README.txt" -Value $readme -Encoding UTF8
 
+      # 5. 创建压缩包：完全分离平台逻辑
       - name: Create archive (Linux/macOS)
         if: matrix.platform.goos != 'windows'
         run: |
@@ -185,8 +198,9 @@ jobs:
           $tag = "${{ steps.get_tag.outputs.tag }}"
           $archive = "${{ env.APP_NAME }}_$tag_${{ matrix.platform.name }}.${{ matrix.platform.archive_format }}"
           7z a -tzip $archive "${{ env.APP_NAME }}_$tag_${{ matrix.platform.name }}\*"
-          echo "ARCHIVE_PATH=$archive" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          Write-Output "ARCHIVE_PATH=$archive" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
+      # 6. 上传工件：统一步骤（使用actions/upload-artifact，跨平台兼容）
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
