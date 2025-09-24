@@ -1,27 +1,31 @@
 name: Release Erebus
 
 permissions:
-  contents: write  # 授予 Release 相关权限（创建 Release、上传资产）
-  actions: read    # 可选：读取工作流状态（按需添加）
+  contents: write  # 必须：删除/创建 Release、上传资产的权限
+  actions: read
 
 on:
   push:
     tags:
-      - 'v*'  # 推送 v 开头标签时触发（如 v1.0.0）
-  workflow_dispatch:  # 允许手动触发工作流
+      - 'v*'  # 推送 v 开头标签触发（如 v1.0.0）
+  workflow_dispatch:  # 允许手动触发
+    inputs:
+      tag_name:
+        description: 'Tag name for release (e.g. v1.0.0)'
+        required: true
+        default: 'v1.0.0'
 
 env:
-  APP_NAME: erebus       # 项目名称（与 Makefile 保持一致）
-  CONFIG_DIR: etc        # 配置文件目录
+  APP_NAME: erebus
+  CONFIG_DIR: etc
 
 jobs:
-  # 多平台构建与打包作业
+  # 第一步：仅构建打包（不提前清理，避免构建耗时期间重复触发冲突）
   build-and-package:
     name: Build for ${{ matrix.platform.name }}
     runs-on: ${{ matrix.platform.runner }}
     strategy:
-      # 确保每个平台独立构建，一个平台失败不影响其他
-      fail-fast: false
+      fail-fast: false  # 一个平台失败不影响其他
       matrix:
         platform:
           - name: linux-amd64
@@ -39,7 +43,7 @@ jobs:
             goos: windows
             goarch: amd64
             archive_format: zip
-            binary_ext: .exe  # Windows 二进制后缀
+            binary_ext: .exe
           - name: darwin-amd64
             runner: macos-latest
             goos: darwin
@@ -50,242 +54,198 @@ jobs:
             goos: darwin
             goarch: arm64
             archive_format: tar.gz
-
+    outputs:
+      target_tag: ${{ steps.get_tag.outputs.tag }}  # 传递标签名给后续步骤
     steps:
-      # 1. 检出代码
+      - name: Get target tag（统一标签来源）
+        id: get_tag
+        run: |
+          if [ "${{ github.event_name }}" = "push" ]; then
+            # 标签触发：使用推送的标签
+            echo "tag=${{ github.ref_name }}" >> $GITHUB_OUTPUT
+          else
+            # 手动触发：使用输入的标签
+            echo "tag=${{ github.event.inputs.tag_name }}" >> $GITHUB_OUTPUT
+          fi
+
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0  # 确保能获取 Git 标签（用于版本号）
+          fetch-depth: 0
+          ref: ${{ steps.get_tag.outputs.tag }}  # 切换到目标标签代码
 
-      # 2. 配置 Go 环境
       - name: Setup Go
         uses: actions/setup-go@v4
         with:
-          go-version: '1.21'  # 与项目 Go 版本保持一致
-          cache: true         # 缓存 Go 依赖，加速构建
-          cache-dependency-path: go.sum  # 依赖缓存路径
+          go-version: '1.21'
+          cache: true
+          cache-dependency-path: go.sum
 
-      # 3. 调用 Makefile 构建（依赖项目根目录的 Makefile 配置）
       - name: Build with Makefile
         env:
           GOOS: ${{ matrix.platform.goos }}
           GOARCH: ${{ matrix.platform.goarch }}
-          CGO_ENABLED: 0  # 禁用 CGO，确保静态编译（跨平台兼容）
+          CGO_ENABLED: 0  # 静态编译，跨平台兼容
         run: make
 
-      # 4. 验证二进制文件（Linux/macOS 专用）
       - name: Verify binary (Linux/macOS)
         if: matrix.platform.goos != 'windows'
         run: |
           BINARY="${{ env.APP_NAME }}${{ matrix.platform.binary_ext || '' }}"
-          # 检查二进制是否存在
           if [ ! -f "$BINARY" ]; then
-            echo "Error: Binary file '$BINARY' not found!"
-            ls -la  # 列出目录内容，辅助排查问题
+            echo "Error: Binary '$BINARY' not found!"
+            ls -la
             exit 1
           fi
-          # 验证二进制文件类型
           file "$BINARY"
-          # 添加可执行权限
           chmod +x "$BINARY"
-          echo "Binary verification passed: $BINARY"
 
-      # 5. 验证二进制文件（Windows 专用）
       - name: Verify binary (Windows)
         if: matrix.platform.goos == 'windows'
         run: |
           $binary = "${{ env.APP_NAME }}${{ matrix.platform.binary_ext || '' }}"
-          # 检查二进制是否存在（PowerShell 语法）
           if (-not (Test-Path $binary -PathType Leaf)) {
-            Write-Error "Binary file '$binary' not found!"
-            Get-ChildItem  # 列出目录内容，辅助排查问题
+            Write-Error "Binary '$binary' not found!"
+            Get-ChildItem
             exit 1
           }
-          # 验证文件信息
           Get-Item $binary
-          Write-Host "Binary verification passed: $binary"
 
-      # 6. 创建打包目录与复制文件（Linux/macOS 专用）
       - name: Create package (Linux/macOS)
         if: matrix.platform.goos != 'windows'
         run: |
-          # 定义打包目录名（格式：项目名_版本_平台）
-          PACKAGE_DIR="${{ env.APP_NAME }}_${{ github.ref_name }}_${{ matrix.platform.name }}"
-          # 创建目录（含配置子目录）
+          TAG=${{ steps.get_tag.outputs.tag }}
+          PACKAGE_DIR="${{ env.APP_NAME }}_${TAG}_${{ matrix.platform.name }}"
           mkdir -p "$PACKAGE_DIR/${{ env.CONFIG_DIR }}"
           
-          # 复制二进制文件
           BINARY="${{ env.APP_NAME }}${{ matrix.platform.binary_ext || '' }}"
           cp "$BINARY" "$PACKAGE_DIR/"
-          chmod +x "$PACKAGE_DIR/$BINARY"
+          chmod +x "$BINARY"
           
-          # 复制配置文件（忽略目录不存在的情况）
           if [ -d "${{ env.CONFIG_DIR }}" ]; then
             cp -r "${{ env.CONFIG_DIR }}"/* "$PACKAGE_DIR/${{ env.CONFIG_DIR }}/" 2>/dev/null || true
           fi
           
-          # 创建 README 说明文件（Unix 语法）
+          # 生成 README
           cat > "$PACKAGE_DIR/README.txt" << EOF
-          Erebus ${{ github.ref_name }} - ${{ matrix.platform.name }}
-          
-          一、包含文件
-            - $BINARY: 主程序可执行文件
-            - ${{ env.CONFIG_DIR }}/: 配置文件目录（含默认配置）
-          
-          二、运行方式
-            1. 进入打包目录：cd $PACKAGE_DIR
-            2. 执行程序：./$BINARY
-            3. （可选）指定配置文件：./$BINARY -config ${{ env.CONFIG_DIR }}/erebus.yaml
-          
-          三、版本信息
-            - 标签版本：${{ github.ref_name }}
-            - 构建平台：${{ matrix.platform.name }}
-            - Go 版本：1.21
+          Erebus $TAG - ${{ matrix.platform.name }}
+          运行：cd $PACKAGE_DIR && ./$BINARY
           EOF
-          echo "Package created: $PACKAGE_DIR"
 
-      # 7. 创建打包目录与复制文件（Windows 专用，解决变量解析冲突）
       - name: Create package (Windows)
         if: matrix.platform.goos == 'windows'
         run: |
-          # 定义变量（PowerShell 语法）
-          $packageDir = "${{ env.APP_NAME }}_${{ github.ref_name }}_${{ matrix.platform.name }}"
+          $tag = "${{ steps.get_tag.outputs.tag }}"
+          $packageDir = "${{ env.APP_NAME }}_$tag_${{ matrix.platform.name }}"
           $binary = "${{ env.APP_NAME }}${{ matrix.platform.binary_ext || '' }}"
           $configDir = "${{ env.CONFIG_DIR }}"
-          $tagVersion = "${{ github.ref_name }}"
-          $platformName = "${{ matrix.platform.name }}"
           
-          # 创建目录（强制创建，忽略已存在）
           New-Item -ItemType Directory -Path "$packageDir\$configDir" -Force | Out-Null
-          
-          # 复制二进制文件（强制覆盖）
           Copy-Item -Path $binary -Destination "$packageDir\" -Force
           
-          # 复制配置文件（目录存在才复制）
           if (Test-Path $configDir -PathType Container) {
             Copy-Item -Path "$configDir\*" -Destination "$packageDir\$configDir\" -Recurse -Force
           }
           
-          # 生成 README 内容（用单引号 Here-String 避免变量解析冲突）
-          $readmeContent = @'
-          Erebus {0} - {1}
-          
-          一、包含文件
-            - {2}: 主程序可执行文件
-            - {3}\: 配置文件目录（含默认配置）
-          
-          二、运行方式
-            1. 进入打包目录：cd {0}
-            2. 执行程序：.\{2}
-            3. （可选）指定配置文件：.\{2} -config {3}\erebus.yaml
-          
-          三、版本信息
-            - 标签版本：{0}
-            - 构建平台：{1}
-            - Go 版本：1.21
-          '@ -f $tagVersion, $platformName, $binary, $configDir
-          
-          # 写入 README 文件（UTF-8 编码，确保中文正常显示）
-          Set-Content -Path "$packageDir\README.txt" -Value $readmeContent -Encoding UTF8
-          Write-Host "Package created: $packageDir"
+          # 生成 README（避免变量解析冲突）
+          $readme = @"
+          Erebus $tag - ${{ matrix.platform.name }}
+          运行：cd $packageDir && .\$binary
+          "@
+          Set-Content -Path "$packageDir\README.txt" -Value $readme -Encoding UTF8
 
-      # -------------------------- 修复核心：拆分压缩步骤 --------------------------
-      # 8. 生成压缩包（Linux/macOS 专用，bash 语法）
       - name: Create archive (Linux/macOS)
         if: matrix.platform.goos != 'windows'
         run: |
-          # 定义压缩包名称与路径
-          PACKAGE_DIR="${{ env.APP_NAME }}_${{ github.ref_name }}_${{ matrix.platform.name }}"
-          ARCHIVE_NAME="${{ env.APP_NAME }}_${{ github.ref_name }}_${{ matrix.platform.name }}.${{ matrix.platform.archive_format }}"
-          
-          # Linux/macOS 用 tar 压缩（保留权限）
-          tar -czf "$ARCHIVE_NAME" "$PACKAGE_DIR"
-          
-          # 输出压缩包信息（供后续步骤使用）
-          echo "ARCHIVE_PATH=$ARCHIVE_NAME" >> $GITHUB_ENV
-          echo "PACKAGE_DIR=$PACKAGE_DIR" >> $GITHUB_ENV
-          echo "Archive created: $ARCHIVE_NAME (size: $(du -sh $ARCHIVE_NAME | cut -f1))"
+          TAG=${{ steps.get_tag.outputs.tag }}
+          ARCHIVE="${{ env.APP_NAME }}_${TAG}_${{ matrix.platform.name }}.${{ matrix.platform.archive_format }}"
+          tar -czf "$ARCHIVE" "${{ env.APP_NAME }}_${TAG}_${{ matrix.platform.name }}"
+          echo "ARCHIVE_PATH=$ARCHIVE" >> $GITHUB_ENV
 
-      # 9. 生成压缩包（Windows 专用，PowerShell 语法）
       - name: Create archive (Windows)
         if: matrix.platform.goos == 'windows'
         run: |
-          # 定义变量（PowerShell 语法）
-          $packageDir = "${{ env.APP_NAME }}_${{ github.ref_name }}_${{ matrix.platform.name }}"
-          $archiveName = "${{ env.APP_NAME }}_${{ github.ref_name }}_${{ matrix.platform.name }}.${{ matrix.platform.archive_format }}"
-          
-          # Windows 用 7z 压缩（明确指定 zip 格式）
-          7z a -tzip $archiveName "$packageDir\*"
-          
-          # 输出压缩包信息（供后续步骤使用，PowerShell 环境变量设置方式）
-          echo "ARCHIVE_PATH=$archiveName" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-          echo "PACKAGE_DIR=$packageDir" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-          # 计算压缩包大小（PowerShell 语法）
-          $archiveSize = (Get-Item $archiveName).Length / 1MB
-          Write-Host "Archive created: $archiveName (size: $($archiveSize.ToString('0.00')) MB)"
+          $tag = "${{ steps.get_tag.outputs.tag }}"
+          $archive = "${{ env.APP_NAME }}_$tag_${{ matrix.platform.name }}.${{ matrix.platform.archive_format }}"
+          7z a -tzip $archive "${{ env.APP_NAME }}_$tag_${{ matrix.platform.name }}\*"
+          echo "ARCHIVE_PATH=$archive" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
-      # --------------------------------------------------------------------------
-
-      # 10. 上传压缩包为 Artifact（便于后续发布）
-      - name: Upload artifact
+      - name: Upload artifact（暂存压缩包，供后续上传）
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ env.APP_NAME }}-${{ matrix.platform.name }}  # Artifact 名称（平台唯一）
-          path: ${{ env.ARCHIVE_PATH }}                         # 压缩包路径
-          retention-days: 1                                    # 保留 1 天（发布后可删除）
-          if-no-files-found: error                             # 无文件时报错
+          name: ${{ env.APP_NAME }}-${{ matrix.platform.name }}
+          path: ${{ env.ARCHIVE_PATH }}
+          retention-days: 3  # 保留3天，确保上传步骤有足够时间获取
+          if-no-files-found: error
 
-  # 创建 GitHub Release（仅在构建完成后执行）
+  # 第二步：创建 Release（上传前清理旧 Release）
   create-release:
-    name: Create GitHub Release
+    name: Clean Old Release & Create New
     runs-on: ubuntu-latest
-    needs: build-and-package  # 依赖 build-and-package 作业完成
+    needs: build-and-package  # 等待所有平台构建完成
     outputs:
-      upload_url: ${{ steps.create_release.outputs.upload_url }}  # 传递上传地址给后续步骤
+      upload_url: ${{ steps.create_new_release.outputs.upload_url }}  # 上传地址
+      target_tag: ${{ needs.build-and-package.outputs.target_tag }}   # 标签名
     steps:
-      - name: Create Release
-        id: create_release
+      - name: Delete old Release（上传前清理）
+        uses: actions/github-script@v7  # 调用 GitHub API 删除旧 Release
+        with:
+          script: |
+            const tagName = "${{ needs.build-and-package.outputs.target_tag }}";
+            const octokit = github.rest;
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            
+            try {
+              // 1. 查找该标签对应的旧 Release
+              const oldRelease = await octokit.repos.getReleaseByTag({
+                owner,
+                repo,
+                tag: tagName
+              });
+            
+              // 2. 删除旧 Release（会自动保留标签，仅删除 Release 记录和资产）
+              await octokit.repos.deleteRelease({
+                owner,
+                repo,
+                release_id: oldRelease.data.id
+              });
+              console.log(`✅ Deleted old release for tag: ${tagName} (ID: ${oldRelease.data.id})`);
+            } catch (error) {
+              // 若旧 Release 不存在（404 错误），直接跳过
+              if (error.status === 404) {
+                console.log(`ℹ️ No old release found for tag: ${tagName}, proceeding...`);
+              } else {
+                // 其他错误（如权限不足）抛出，终止流程
+                console.error(`❌ Failed to delete old release: ${error.message}`);
+                throw error;
+              }
+            }
+
+      - name: Create new Release（清理后立即创建新 Release）
+        id: create_new_release
         uses: actions/create-release@v1
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}  # GitHub 自动注入的 Token（无需手动配置）
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tag_name: ${{ github.ref_name }}          # 标签名（与触发标签一致）
-          release_name: Erebus ${{ github.ref_name }}  # 发布名称
-          draft: false                               # 不创建草稿（直接发布）
-          prerelease: false                          # 不标记为预发布（正式版本）
-          # 发布描述（Markdown 格式）
+          tag_name: ${{ needs.build-and-package.outputs.target_tag }}
+          release_name: Erebus ${{ needs.build-and-package.outputs.target_tag }}
+          draft: false  # 直接发布（如需审核可设为 true）
+          prerelease: false
           body: |
-            ## Erebus ${{ github.ref_name }} 正式发布
-            
-            ### 📦 下载链接
-            - [Linux AMD64](${erebus_${{ github.ref_name }}_linux-amd64.tar.gz})
-            - [Linux ARM64](${erebus_${{ github.ref_name }}_linux-arm64.tar.gz})
-            - [Windows AMD64](${erebus_${{ github.ref_name }}_windows-amd64.zip})
-            - [macOS AMD64](${erebus_${{ github.ref_name }}_darwin-amd64.tar.gz})
-            - [macOS ARM64](${erebus_${{ github.ref_name }}_darwin-arm64.tar.gz})
-            
-            ### 📋 包含内容
-            每个压缩包包含：
-            - 主程序（erebus 或 erebus.exe）
-            - 配置文件目录（etc/，含默认配置）
-            - README.txt（详细使用说明）
-            
-            ### 🔧 运行要求
-            - Go 运行时：无需（静态编译）
-            - 系统架构：对应平台架构（如 Windows AMD64 需 64 位系统）
-            - 权限：执行权限（Linux/macOS 需 chmod +x）
-            
-            ### 📝 版本说明
-            - 构建时间：${{ github.event.head_commit.timestamp }}
-            - 代码提交：${{ github.event.head_commit.id }}
-            - 构建环境：GitHub Actions
+            ## Erebus ${{ needs.build-and-package.outputs.target_tag }}
+            ### 下载链接
+            - Linux AMD64: erebus_${{ needs.build-and-package.outputs.target_tag }}_linux-amd64.tar.gz
+            - Linux ARM64: erebus_${{ needs.build-and-package.outputs.target_tag }}_linux-arm64.tar.gz
+            - Windows AMD64: erebus_${{ needs.build-and-package.outputs.target_tag }}_windows-amd64.zip
+            - macOS AMD64: erebus_${{ needs.build-and-package.outputs.target_tag }}_darwin-amd64.tar.gz
+            - macOS ARM64: erebus_${{ needs.build-and-package.outputs.target_tag }}_darwin-arm64.tar.gz
 
-  # 上传压缩包到 GitHub Release（对应每个平台）
+  # 第三步：上传资产到新 Release（清理后创建的 Release 可正常上传）
   upload-to-release:
     name: Upload ${{ matrix.platform.name }} to Release
     runs-on: ubuntu-latest
-    needs: [create-release, build-and-package]  # 依赖前两个作业完成
+    needs: [create-release, build-and-package]  # 依赖“清理+创建 Release”和“构建”
     strategy:
       fail-fast: false
       matrix:
@@ -301,20 +261,18 @@ jobs:
           - name: darwin-arm64
             archive_format: tar.gz
     steps:
-      # 下载之前上传的 Artifact（压缩包）
-      - name: Download artifact
+      - name: Download artifact（获取之前构建的压缩包）
         uses: actions/download-artifact@v4
         with:
-          name: ${{ env.APP_NAME }}-${{ matrix.platform.name }}  # 与上传时的 Artifact 名称一致
-          path: ./artifacts  # 下载到 artifacts 目录
+          name: ${{ env.APP_NAME }}-${{ matrix.platform.name }}
+          path: ./artifacts  # 压缩包保存到 artifacts 目录
 
-      # 上传压缩包到 GitHub Release
-      - name: Upload to Release
+      - name: Upload to Release（此时 Release 是全新的，无“不可修改”问题）
         uses: actions/upload-release-asset@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          upload_url: ${{ needs.create-release.outputs.upload_url }}  # 从 create-release 作业获取上传地址
-          asset_path: ./artifacts/${{ env.APP_NAME }}_${{ github.ref_name }}_${{ matrix.platform.name }}.${{ matrix.platform.archive_format }}  # 压缩包路径
-          asset_name: ${{ env.APP_NAME }}_${{ github.ref_name }}_${{ matrix.platform.name }}.${{ matrix.platform.archive_format }}  # 显示在 Release 上的文件名
-          asset_content_type: application/octet-stream  # 二进制文件类型（通用）
+          upload_url: ${{ needs.create-release.outputs.upload_url }}  # 新 Release 的上传地址
+          asset_path: ./artifacts/${{ env.APP_NAME }}_${{ needs.create-release.outputs.target_tag }}_${{ matrix.platform.name }}.${{ matrix.platform.archive_format }}
+          asset_name: ${{ env.APP_NAME }}_${{ needs.create-release.outputs.target_tag }}_${{ matrix.platform.name }}.${{ matrix.platform.archive_format }}
+          asset_content_type: application/octet-stream  # 二进制文件通用类型
