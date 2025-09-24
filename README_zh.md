@@ -1,6 +1,7 @@
 # Erebus - 多目标实时数据同步平台
 
 Erebus 是一个高性能、可扩展的实时数据同步平台，支持将 MySQL 数据实时同步到多种目标数据存储系统。
+*[中文版](README_zh.md) • [English Version](README.md)*
 
 ## 🚀 功能特性
 
@@ -288,6 +289,3 @@ tail -f logs/erebus.log
 - 所有贡献者和用户的支持
 
 **Erebus** - 让数据同步更简单、更可靠！ 🚀
-
----
-*[中文版](README_zh.md) • [English Version](README.md)*

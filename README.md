@@ -1,6 +1,7 @@
 # Erebus - Multi-Target Real-Time Data Synchronization Platform
 
 Erebus is a high-performance, scalable real-time data synchronization platform that supports streaming MySQL data to multiple target data storage systems.
+*[中文版](README_zh.md) • [English Version](README.md)*
 
 ## 🚀 Key Features
 
@@ -288,6 +289,3 @@ Thanks to the following open-source projects:
 - All contributors and users for their support
 
 **Erebus** - Making data synchronization simpler and more reliable! 🚀
-
----
-*[中文版](README_zh.md) • [English Version](README.md)*
