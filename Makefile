@@ -108,7 +108,24 @@ generate-service:
 	@if [ ! -f $(SERVICE_TEMPLATE) ]; then \
 		echo "Error: Template file $(SERVICE_TEMPLATE) not found."; \
 		echo "Creating a basic template..."; \
-		$(call create_basic_template); \
+		echo '[Unit]' > $(SERVICE_TEMPLATE); \
+		echo 'Description=Erebus Service' >> $(SERVICE_TEMPLATE); \
+		echo 'After=network.target' >> $(SERVICE_TEMPLATE); \
+		echo '' >> $(SERVICE_TEMPLATE); \
+		echo '[Service]' >> $(SERVICE_TEMPLATE); \
+		echo 'Type=simple' >> $(SERVICE_TEMPLATE); \
+		echo 'User=@SERVICE_USER@' >> $(SERVICE_TEMPLATE); \
+		echo 'Group=@SERVICE_GROUP@' >> $(SERVICE_TEMPLATE); \
+		echo 'ExecStart=@BIN_DIR@/@SERVICE_NAME@ -f @CONF_DIR@/erebus.yaml' >> $(SERVICE_TEMPLATE); \
+		echo 'WorkingDirectory=@BIN_DIR@' >> $(SERVICE_TEMPLATE); \
+		echo 'Restart=always' >> $(SERVICE_TEMPLATE); \
+		echo 'RestartSec=5' >> $(SERVICE_TEMPLATE); \
+		echo 'StandardOutput=journal' >> $(SERVICE_TEMPLATE); \
+		echo 'StandardError=journal' >> $(SERVICE_TEMPLATE); \
+		echo '' >> $(SERVICE_TEMPLATE); \
+		echo '[Install]' >> $(SERVICE_TEMPLATE); \
+		echo 'WantedBy=multi-user.target' >> $(SERVICE_TEMPLATE); \
+		echo "Basic template created at $(SERVICE_TEMPLATE)"; \
 	fi
 	sed -e 's|@BIN_DIR@|$(BIN_DIR)|g' \
 		-e 's|@SERVICE_NAME@|$(SERVICE_NAME)|g' \
@@ -118,27 +135,6 @@ generate-service:
 		-e 's|@LOG_DIR@|$(LOG_DIR)|g' \
 		$(SERVICE_TEMPLATE) > $(SERVICE_NAME).service
 	@echo "Service file generated: $(SERVICE_NAME).service"
-
-# 创建基本模板的函数（如果模板不存在）
-define create_basic_template
-echo '[Unit]' > $(SERVICE_TEMPLATE)
-echo 'Description=Erebus Service' >> $(SERVICE_TEMPLATE)
-echo 'After=network.target' >> $(SERVICE_TEMPLATE)
-echo '' >> $(SERVICE_TEMPLATE)
-echo '[Service]' >> $(SERVICE_TEMPLATE)
-echo 'Type=simple' >> $(SERVICE_TEMPLATE)
-echo 'User=@SERVICE_USER@' >> $(SERVICE_TEMPLATE)
-echo 'Group=@SERVICE_GROUP@' >> $(SERVICE_TEMPLATE)
-echo 'ExecStart=@BIN_DIR@/@SERVICE_NAME@ -f @CONF_DIR@/erebus.yaml' >> $(SERVICE_TEMPLATE)
-echo 'WorkingDirectory=@BIN_DIR@' >> $(SERVICE_TEMPLATE)
-echo 'Restart=always' >> $(SERVICE_TEMPLATE)
-echo 'RestartSec=5' >> $(SERVICE_TEMPLATE)
-echo 'StandardOutput=journal' >> $(SERVICE_TEMPLATE)
-echo 'StandardError=journal' >> $(SERVICE_TEMPLATE)
-echo '' >> $(SERVICE_TEMPLATE)
-echo '[Install]' >> $(SERVICE_TEMPLATE)
-echo 'WantedBy=multi-user.target' >> $(SERVICE_TEMPLATE)
-endef
 
 # 系统安装（包含服务安装）
 .PHONY: system-install
@@ -216,7 +212,15 @@ system-install: build generate-service
 	@echo ""
 	@echo "=== Installation Complete ==="
 	@echo "Binary:        $(BIN_DIR)/$(BINARY_NAME)"
-	@echo "Config:        $(CONF_DIR)/erebus.yaml $(if $(shell test -f $(CONF_DIR)/erebus.yaml && echo exists),$(if $(shell test -f $(CONF_DIR)/erebus.yaml && test $(CONF_DIR)/erebus.yaml -nt $(CONFIG_FILE) 2>/dev/null && echo newer),- EXISTING PRESERVED,- NEWLY INSTALLED))"
+	@if [ -f $(CONF_DIR)/erebus.yaml ]; then \
+		if [ -f $(CONFIG_FILE) ] && cmp -s $(CONF_DIR)/erebus.yaml $(CONFIG_FILE); then \
+			echo "Config:        $(CONF_DIR)/erebus.yaml - NEWLY INSTALLED"; \
+		else \
+			echo "Config:        $(CONF_DIR)/erebus.yaml - EXISTING PRESERVED"; \
+		fi; \
+	else \
+		echo "Config:        $(CONF_DIR)/erebus.yaml - NOT INSTALLED"; \
+	fi
 	@echo "Service:       $(SERVICE_DIR)/$(SERVICE_NAME).service"
 	@echo "Log directory: $(LOG_DIR)"
 	@echo "Service user:  $(SERVICE_USER):$(SERVICE_GROUP)"

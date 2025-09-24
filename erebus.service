@@ -1,0 +1,42 @@
+[Unit]
+Description=Erebus Service
+Documentation=https://github.com/your-username/erebus
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+ExecStart=/usr/local/bin/erebus -f /etc/erebus/erebus.yaml
+WorkingDirectory=/usr/local/bin
+
+# 环境配置
+Environment=ENV=production
+Environment=CONFIG_PATH=/etc/erebus/erebus.yaml
+Environment=LOG_DIR=/var/log/erebus
+
+# 日志配置
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=erebus
+
+# 进程管理
+Restart=always
+RestartSec=5
+StartLimitInterval=100
+StartLimitBurst=10
+TimeoutStopSec=30
+
+# 资源限制
+LimitNOFILE=65536
+
+# 安全设置
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/log/erebus
+ReadOnlyPaths=/etc/erebus
+
+[Install]
+WantedBy=multi-user.target
