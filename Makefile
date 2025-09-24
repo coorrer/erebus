@@ -28,8 +28,8 @@ BIN_DIR ?= $(PREFIX)/bin
 CONF_DIR ?= /etc/$(SERVICE_NAME)
 LOG_DIR ?= /var/log/$(SERVICE_NAME)
 SERVICE_DIR ?= /etc/systemd/system
-SERVICE_USER ?= erebus
-SERVICE_GROUP ?= erebus
+SERVICE_USER ?= root
+SERVICE_GROUP ?= root
 
 # 模板和配置文件
 SERVICE_TEMPLATE := erebus.service.template
@@ -57,6 +57,14 @@ test:
 	@echo "Running tests..."
 	$(GO_TEST) -v -race -cover ./...
 
+# 测试覆盖率
+.PHONY: coverage
+coverage:
+	@echo "Generating test coverage report..."
+	$(GO_TEST) -race -coverprofile=coverage.out ./...
+	$(GO) tool cover -html=coverage.out -o coverage.html
+	@echo "Coverage report generated: coverage.html"
+
 # 清理构建文件
 .PHONY: clean
 clean:
@@ -66,6 +74,33 @@ clean:
 	rm -f *.log coverage.out coverage.html
 	rm -f $(SERVICE_NAME).service
 
+# 多平台交叉编译
+.PHONY: cross-build
+cross-build:
+	@echo "Building for multiple platforms..."
+	@mkdir -p $(DIST_DIR)
+
+	# Linux
+	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 $(GO_BUILD) -ldflags="$(GO_LDFLAGS)" -o $(DIST_DIR)/$(BINARY_NAME)-linux-amd64 .
+	GOOS=linux GOARCH=arm64 CGO_ENABLED=0 $(GO_BUILD) -ldflags="$(GO_LDFLAGS)" -o $(DIST_DIR)/$(BINARY_NAME)-linux-arm64 .
+
+	# macOS
+	GOOS=darwin GOARCH=amd64 CGO_ENABLED=0 $(GO_BUILD) -ldflags="$(GO_LDFLAGS)" -o $(DIST_DIR)/$(BINARY_NAME)-darwin-amd64 .
+	GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 $(GO_BUILD) -ldflags="$(GO_LDFLAGS)" -o $(DIST_DIR)/$(BINARY_NAME)-darwin-arm64 .
+
+	# Windows
+	GOOS=windows GOARCH=amd64 CGO_ENABLED=0 $(GO_BUILD) -ldflags="$(GO_LDFLAGS)" -o $(DIST_DIR)/$(BINARY_NAME)-windows-amd64.exe .
+	GOOS=windows GOARCH=arm64 CGO_ENABLED=0 $(GO_BUILD) -ldflags="$(GO_LDFLAGS)" -o $(DIST_DIR)/$(BINARY_NAME)-windows-arm64.exe .
+
+	@echo "Build complete. Binaries available in $(DIST_DIR)/"
+
+# 生成校验和
+.PHONY: checksum
+checksum: cross-build
+	@echo "Generating checksums..."
+	cd $(DIST_DIR) && shasum -a 256 * > $(BINARY_NAME)-$(VERSION)-checksums.txt
+	@echo "Checksums generated: $(DIST_DIR)/$(BINARY_NAME)-$(VERSION)-checksums.txt"
+
 # 生成 systemd 服务文件
 .PHONY: generate-service
 generate-service:
@@ -73,7 +108,7 @@ generate-service:
 	@if [ ! -f $(SERVICE_TEMPLATE) ]; then \
 		echo "Error: Template file $(SERVICE_TEMPLATE) not found."; \
 		echo "Creating a basic template..."; \
-		create_basic_template; \
+		$(call create_basic_template); \
 	fi
 	sed -e 's|@BIN_DIR@|$(BIN_DIR)|g' \
 		-e 's|@SERVICE_NAME@|$(SERVICE_NAME)|g' \
@@ -143,21 +178,26 @@ system-install: build generate-service
 	# 安装二进制文件
 	install -m 755 $(BINARY_NAME) $(BIN_DIR)/$(BINARY_NAME)
 
-	# 安装配置文件
+	# 安装配置文件（如果不存在则安装，存在则跳过）
 	if [ -f $(CONFIG_FILE) ]; then \
 		if [ -f $(CONF_DIR)/erebus.yaml ]; then \
-			cp $(CONF_DIR)/erebus.yaml $(CONF_DIR)/erebus.yaml.backup.$$(date +%Y%m%d%H%M%S); \
-			echo "Backed up existing config file"; \
+			echo "Config file $(CONF_DIR)/erebus.yaml already exists, skipping installation to preserve existing configuration."; \
+			echo "If you want to update the config, run: sudo make update-config"; \
+		else \
+			install -m 640 $(CONFIG_FILE) $(CONF_DIR)/erebus.yaml; \
+			echo "Config file installed to $(CONF_DIR)/erebus.yaml"; \
 		fi; \
-		install -m 640 $(CONFIG_FILE) $(CONF_DIR)/erebus.yaml; \
-		echo "Config file installed to $(CONF_DIR)/erebus.yaml"; \
 	else \
-		echo "Warning: Config file $(CONFIG_FILE) not found, creating empty config"; \
-		touch $(CONF_DIR)/erebus.yaml; \
-		chmod 640 $(CONF_DIR)/erebus.yaml; \
+		echo "Warning: Source config file $(CONFIG_FILE) not found"; \
+		# 如果目标配置文件也不存在，创建空文件 \
+		if [ ! -f $(CONF_DIR)/erebus.yaml ]; then \
+			touch $(CONF_DIR)/erebus.yaml; \
+			chmod 640 $(CONF_DIR)/erebus.yaml; \
+			echo "Created empty config file at $(CONF_DIR)/erebus.yaml"; \
+		fi; \
 	fi
 
-	# 安装服务文件
+	# 安装服务文件（总是覆盖，因为这是系统服务配置）
 	install -m 644 $(SERVICE_NAME).service $(SERVICE_DIR)/$(SERVICE_NAME).service
 
 	# 设置文件权限
@@ -176,7 +216,7 @@ system-install: build generate-service
 	@echo ""
 	@echo "=== Installation Complete ==="
 	@echo "Binary:        $(BIN_DIR)/$(BINARY_NAME)"
-	@echo "Config:        $(CONF_DIR)/erebus.yaml"
+	@echo "Config:        $(CONF_DIR)/erebus.yaml $(if $(shell test -f $(CONF_DIR)/erebus.yaml && echo exists),$(if $(shell test -f $(CONF_DIR)/erebus.yaml && test $(CONF_DIR)/erebus.yaml -nt $(CONFIG_FILE) 2>/dev/null && echo newer),- EXISTING PRESERVED,- NEWLY INSTALLED))"
 	@echo "Service:       $(SERVICE_DIR)/$(SERVICE_NAME).service"
 	@echo "Log directory: $(LOG_DIR)"
 	@echo "Service user:  $(SERVICE_USER):$(SERVICE_GROUP)"
@@ -185,6 +225,83 @@ system-install: build generate-service
 	@echo "  sudo systemctl start $(SERVICE_NAME)"
 	@echo "  sudo systemctl status $(SERVICE_NAME)"
 	@echo "  sudo journalctl -u $(SERVICE_NAME) -f"
+
+# 专门更新配置的目标（需要手动调用）
+.PHONY: update-config
+update-config:
+	@echo "Updating configuration file..."
+
+	# 检查权限
+	if [ "$(shell id -u)" -ne 0 ]; then \
+		echo "Error: requires root privileges"; \
+		echo "Please run: sudo make update-config"; \
+		exit 1; \
+	fi
+
+	# 检查源配置文件是否存在
+	if [ ! -f $(CONFIG_FILE) ]; then \
+		echo "Error: Source config file $(CONFIG_FILE) not found"; \
+		exit 1; \
+	fi
+
+	# 备份现有配置
+	if [ -f $(CONF_DIR)/erebus.yaml ]; then \
+		backup_file="$(CONF_DIR)/erebus.yaml.backup.$$(date +%Y%m%d%H%M%S)"; \
+		cp $(CONF_DIR)/erebus.yaml $$backup_file; \
+		echo "Backed up existing config to $$backup_file"; \
+	fi
+
+	# 安装新配置
+	install -m 640 $(CONFIG_FILE) $(CONF_DIR)/erebus.yaml
+	chown root:$(SERVICE_GROUP) $(CONF_DIR)/erebus.yaml
+	echo "Configuration updated. Old config backed up."
+	echo "Please review the changes and restart the service if needed:"
+	echo "  sudo systemctl restart $(SERVICE_NAME)"
+
+# 安装示例配置（不覆盖现有配置）
+.PHONY: install-example-config
+install-example-config:
+	@echo "Installing example configuration..."
+
+	# 检查权限
+	if [ "$(shell id -u)" -ne 0 ]; then \
+		echo "Error: requires root privileges"; \
+		echo "Please run: sudo make install-example-config"; \
+		exit 1; \
+	fi
+
+	# 检查源配置文件是否存在
+	if [ ! -f $(CONFIG_FILE) ]; then \
+		echo "Error: Example config file $(CONFIG_FILE) not found"; \
+		exit 1; \
+	fi
+
+	# 安装为示例文件（不覆盖现有配置）
+	example_file="$(CONF_DIR)/erebus.yaml.example"
+	install -m 640 $(CONFIG_FILE) $$example_file
+	chown root:$(SERVICE_GROUP) $$example_file
+	echo "Example config installed to $$example_file"
+	echo "You can compare it with your current config:"
+	echo "  diff -u $(CONF_DIR)/erebus.yaml $$example_file || echo 'No existing config to compare'"
+
+# 显示配置状态
+.PHONY: config-status
+config-status:
+	@echo "Configuration Status:"
+	@echo "  Source config:      $(CONFIG_FILE) $(if $(shell test -f $(CONFIG_FILE) && echo exists),EXISTS,NOT FOUND)"
+	@echo "  Installed config:   $(CONF_DIR)/erebus.yaml $(if $(shell test -f $(CONF_DIR)/erebus.yaml && echo exists),EXISTS,NOT FOUND)"
+	@if [ -f $(CONF_DIR)/erebus.yaml ] && [ -f $(CONFIG_FILE) ]; then \
+		if cmp -s $(CONF_DIR)/erebus.yaml $(CONFIG_FILE); then \
+			echo "  Status:             Config files are identical"; \
+		else \
+			echo "  Status:             Config files differ"; \
+			echo "  Last modified:      $$(stat -c %y $(CONF_DIR)/erebus.yaml 2>/dev/null || echo 'Unknown')"; \
+		fi; \
+	elif [ -f $(CONF_DIR)/erebus.yaml ]; then \
+		echo "  Status:             Using existing configuration"; \
+	else \
+		echo "  Status:             No configuration installed"; \
+	fi
 
 # 服务管理命令
 .PHONY: start
@@ -255,33 +372,70 @@ system-purge: system-uninstall
 	rm -rf $(LOG_DIR)
 	@echo "Purge complete."
 
+# GoReleaser 相关命令
+.PHONY: release-dry-run
+release-dry-run:
+	@echo "Running GoReleaser in dry-run mode..."
+	goreleaser release --clean --snapshot --skip=publish
+
+.PHONY: release
+release:
+	@echo "Creating release..."
+	goreleaser release --clean
+
+.PHONY: snapshot
+snapshot:
+	@echo "Creating snapshot release..."
+	goreleaser release --clean --snapshot
+
+# 显示版本信息
+.PHONY: version
+version:
+	@echo "Version:    $(VERSION)"
+	@echo "Commit:     $(COMMIT)"
+	@echo "Build Time: $(BUILD_TIME)"
+	@echo "Go Version: $(GO_VERSION)"
+
 # 显示帮助信息
 .PHONY: help
 help:
 	@echo "Makefile for $(SERVICE_NAME) v$(VERSION)"
 	@echo ""
 	@echo "Usage:"
-	@echo "  make              - 编译项目（当前平台）"
-	@echo "  make build        - 编译项目"
-	@echo "  make install      - 安装到 GOPATH/bin"
-	@echo "  make test         - 运行测试"
-	@echo "  make clean        - 清理构建文件"
+	@echo "  make                    - 编译项目（当前平台）"
+	@echo "  make build              - 编译项目"
+	@echo "  make install            - 安装到 GOPATH/bin"
+	@echo "  make test               - 运行测试"
+	@echo "  make coverage           - 生成测试覆盖率报告"
+	@echo "  make clean              - 清理构建文件"
+	@echo "  make cross-build        - 交叉编译多平台版本"
+	@echo "  make checksum           - 生成校验和文件"
+	@echo "  make version            - 显示版本信息"
 	@echo ""
 	@echo "System Service:"
-	@echo "  make generate-service - 生成 systemd 服务文件"
-	@echo "  make system-install   - 安装到系统目录（需要root）"
-	@echo "  make system-uninstall - 卸载系统服务（保留配置）"
-	@echo "  make system-purge     - 完全删除（包括配置）"
+	@echo "  make generate-service        - 生成 systemd 服务文件"
+	@echo "  make system-install          - 安装到系统目录（需要root）"
+	@echo "  make system-uninstall        - 卸载系统服务（保留配置）"
+	@echo "  make system-purge            - 完全删除（包括配置）"
+	@echo "  make update-config           - 更新配置文件（备份旧配置）"
+	@echo "  make install-example-config  - 安装示例配置"
+	@echo "  make config-status           - 显示配置状态"
 	@echo ""
 	@echo "Service Management (需要root):"
-	@echo "  make start        - 启动服务"
-	@echo "  make stop         - 停止服务"
-	@echo "  make restart      - 重启服务"
-	@echo "  make status       - 查看服务状态"
-	@echo "  make logs         - 查看服务日志"
-	@echo "  make enable       - 启用开机自启"
-	@echo "  make disable      - 禁用开机自启"
+	@echo "  make start             - 启动服务"
+	@echo "  make stop              - 停止服务"
+	@echo "  make restart           - 重启服务"
+	@echo "  make status            - 查看服务状态"
+	@echo "  make logs              - 查看服务日志"
+	@echo "  make enable            - 启用开机自启"
+	@echo "  make disable           - 禁用开机自启"
+	@echo ""
+	@echo "Release:"
+	@echo "  make release-dry-run   - 测试发布流程"
+	@echo "  make snapshot          - 创建快照版本"
+	@echo "  make release           - 创建正式发布"
 	@echo ""
 	@echo "Variables:"
 	@echo "  VERSION=$(VERSION)"
 	@echo "  COMMIT=$(COMMIT)"
+	@echo "  BUILD_TIME=$(BUILD_TIME)"
