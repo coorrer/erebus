@@ -22,27 +22,32 @@ jobs:
             goos: linux
             goarch: amd64
             archive_format: tar.gz
+            shell: bash
           - name: linux-arm64
             runner: ubuntu-latest
             goos: linux
             goarch: arm64
             archive_format: tar.gz
+            shell: bash
           - name: windows-amd64
             runner: windows-latest
             goos: windows
             goarch: amd64
             archive_format: zip
             binary_ext: .exe
+            shell: pwsh  # 使用 PowerShell
           - name: darwin-amd64
             runner: macos-latest
             goos: darwin
             goarch: amd64
             archive_format: tar.gz
+            shell: bash
           - name: darwin-arm64
             runner: macos-latest
             goos: darwin
             goarch: arm64
             archive_format: tar.gz
+            shell: bash
 
     steps:
       - name: Checkout code
@@ -61,172 +66,140 @@ jobs:
         run: |
           make
 
-      - name: Verify binary (Linux/macOS)
-        if: matrix.platform.goos != 'windows'
+      - name: Verify binary
+        shell: ${{ matrix.platform.shell }}
         run: |
-          BINARY="${{ env.APP_NAME }}${{ matrix.platform.binary_ext || '' }}"
-          if [ ! -f "$BINARY" ]; then
-            echo "Error: Binary $BINARY not found!"
-            ls -la
-            exit 1
-          fi
-          file $BINARY
-          chmod +x $BINARY
-
-      - name: Verify binary (Windows)
-        if: matrix.platform.goos == 'windows'
-        run: |
-          $binary = "${{ env.APP_NAME }}${{ matrix.platform.binary_ext || '' }}"
-          if (-not (Test-Path $binary -PathType Leaf)) {
-            Write-Host "Error: Binary $binary not found!"
+          $BINARY = "${{ env.APP_NAME }}${{ matrix.platform.binary_ext || '' }}"
+          if (-Not (Test-Path $BINARY)) {
+            Write-Error "Error: Binary $BINARY not found!"
             Get-ChildItem
             exit 1
           }
-          Get-Item $binary
+          # 检查二进制文件类型（Linux/Mac）
+          if ("${{ matrix.platform.goos }}" -ne "windows") {
+            file $BINARY
+            chmod +x $BINARY
+          }
 
-      - name: Create package directory (Linux/macOS)
-        if: matrix.platform.goos != 'windows'
+      - name: Create package directory
+        shell: ${{ matrix.platform.shell }}
         run: |
-          PACKAGE_DIR="${{ env.APP_NAME }}_${{ github.ref_name }}_${{ matrix.platform.name }}"
-          mkdir -p $PACKAGE_DIR/${{ env.CONFIG_DIR }}
+          $PACKAGE_DIR = "${{ env.APP_NAME }}_${{ github.ref_name }}_${{ matrix.platform.name }}"
+          New-Item -ItemType Directory -Path "$PACKAGE_DIR/${{ env.CONFIG_DIR }}" -Force
           
           # 复制二进制文件
-          BINARY="${{ env.APP_NAME }}${{ matrix.platform.binary_ext || '' }}"
-          cp $BINARY $PACKAGE_DIR/
-          chmod +x $PACKAGE_DIR/$BINARY 2>/dev/null || true
+          $BINARY = "${{ env.APP_NAME }}${{ matrix.platform.binary_ext || '' }}"
+          Copy-Item $BINARY $PACKAGE_DIR/
+          if ("${{ matrix.platform.goos }}" -ne "windows") {
+            chmod +x "$PACKAGE_DIR/$BINARY"
+          }
           
           # 复制配置文件
-          cp -r ${{ env.CONFIG_DIR }}/* $PACKAGE_DIR/${{ env.CONFIG_DIR }}/
+          if (Test-Path "${{ env.CONFIG_DIR }}") {
+            Copy-Item -Recurse "${{ env.CONFIG_DIR }}/*" "$PACKAGE_DIR/${{ env.CONFIG_DIR }}/"
+          }
           
           # 创建说明文件
-          cat > $PACKAGE_DIR/README.txt << EOF
-          Erebus ${{ github.ref_name }} - ${{ matrix.platform.name }}
-          
-          包含文件:
-          - $BINARY: 主程序
-          - ${{ env.CONFIG_DIR }}/: 配置文件目录
-          
-          运行方式:
-          ./$BINARY
-          EOF
+          $README_CONTENT = @"
+  Erebus ${{ github.ref_name }} - ${{ matrix.platform.name }}
 
-      - name: Create package directory (Windows)
-        if: matrix.platform.goos == 'windows'
-        run: |
-          $packageDir = "${{ env.APP_NAME }}_${{ github.ref_name }}_${{ matrix.platform.name }}"
-          $binary = "${{ env.APP_NAME }}${{ matrix.platform.binary_ext || '' }}"
-          $configDir = "${{ env.CONFIG_DIR }}"
-          
-          # 创建目录
-          New-Item -ItemType Directory -Path "$packageDir\$configDir" -Force | Out-Null
-          
-          # 复制二进制文件
-          Copy-Item -Path $binary -Destination "$packageDir\" -Force
-          
-          # 复制配置文件
-          Copy-Item -Path "$configDir\*" -Destination "$packageDir\$configDir\" -Recurse -Force
-          
-          # 创建说明文件 (使用PowerShell语法)
-          $readmeContent = @"
-          Erebus ${{ github.ref_name }} - ${{ matrix.platform.name }}
-          
-          包含文件:
-          - $binary: 主程序
-          - $configDir/: 配置文件目录
-          
-          运行方式:
-          .\$binary
-          "@
-          Set-Content -Path "$packageDir\README.txt" -Value $readmeContent -Encoding utf8
+包含文件:
+  - $BINARY: 主程序
+  - ${{ env.CONFIG_DIR }}/: 配置文件目录
 
-      - name: Create archive
-        run: |
-          PACKAGE_DIR="${{ env.APP_NAME }}_${{ github.ref_name }}_${{ matrix.platform.name }}"
-          ARCHIVE_NAME="${{ env.APP_NAME }}_${{ github.ref_name }}_${{ matrix.platform.name }}.${{ matrix.platform.archive_format }}"
-          
-          if [ "${{ matrix.platform.archive_format }}" = "tar.gz" ]; then
-            tar -czf $ARCHIVE_NAME $PACKAGE_DIR
-          else
-            # Windows 使用 zip
-            cd $PACKAGE_DIR && zip -r ../$ARCHIVE_NAME . && cd ..
-          fi
-          
-          echo "ARCHIVE_PATH=$ARCHIVE_NAME" >> $GITHUB_ENV
-          echo "PACKAGE_DIR=$PACKAGE_DIR" >> $GITHUB_ENV
+运行方式:
+  ./$BINARY
+  "@
+          Set-Content -Path "$PACKAGE_DIR/README.txt" -Value $README_CONTENT
 
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ env.APP_NAME }}-${{ matrix.platform.name }}
-          path: |
-            ${{ env.ARCHIVE_PATH }}
-          retention-days: 1
-
-  create-release:
-    name: Create Release
-    runs-on: ubuntu-latest
-    needs: build-and-package
-    outputs:
-      upload_url: ${{ steps.create_release.outputs.upload_url }}
-    steps:
-      - name: Create Release
-        id: create_release
-        uses: actions/create-release@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tag_name: ${{ github.ref_name }}
-          release_name: Erebus ${{ github.ref_name }}
-          draft: false
-          body: |
-            ## Erebus ${{ github.ref_name }}
-            
-            多平台发布版本，包含可执行文件和配置文件。
-            
-            ### 下载
-            - **Linux AMD64**: `erebus_${{ github.ref_name }}_linux-amd64.tar.gz`
-            - **Linux ARM64**: `erebus_${{ github.ref_name }}_linux-arm64.tar.gz`
-            - **Windows AMD64**: `erebus_${{ github.ref_name }}_windows-amd64.zip`
-            - **macOS AMD64**: `erebus_${{ github.ref_name }}_darwin-amd64.tar.gz`
-            - **macOS ARM64**: `erebus_${{ github.ref_name }}_darwin-arm64.tar.gz`
-            
-            ### 包含内容
-            每个包包含：
-            - `erebus` (或 `erebus.exe`) - 主程序
-            - `etc/erebus.yaml` - 配置文件
-
-  upload-release:
-    name: Upload to Release
-    runs-on: ubuntu-latest
-    needs: [create-release, build-and-package]
-    strategy:
-      matrix:
-        platform:
-          - name: linux-amd64
-            archive_format: tar.gz
-          - name: linux-arm64
-            archive_format: tar.gz
-          - name: windows-amd64
-            archive_format: zip
-          - name: darwin-amd64
-            archive_format: tar.gz
-          - name: darwin-arm64
-            archive_format: tar.gz
-
-    steps:
-      - name: Download artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: ${{ env.APP_NAME }}-${{ matrix.platform.name }}
-          path: ./artifacts
-
-      - name: Upload to Release
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ needs.create-release.outputs.upload_url }}
-          asset_path: ./artifacts/${{ env.APP_NAME }}_${{ github.ref_name }}_${{ matrix.platform.name }}.${{ matrix.platform.archive_format }}
-          asset_name: ${{ env.APP_NAME }}_${{ github.ref_name }}_${{ matrix.platform.name }}.${{ matrix.platform.archive_format }}
-          asset_content_type: application/octet-stream
+- name: Create archive
+  shell: ${{ matrix.platform.shell }}
+  run: |
+    $PACKAGE_DIR = "${{ env.APP_NAME }}_${{ github.ref_name }}_${{ matrix.platform.name }}"
+    $ARCHIVE_NAME = "${{ env.APP_NAME }}_${{ github.ref_name }}_${{ matrix.platform.name }}.${{ matrix.platform.archive_format }}"
     
+    if ("${{ matrix.platform.archive_format }}" -eq "tar.gz") {
+      tar -czf $ARCHIVE_NAME $PACKAGE_DIR
+    } else {
+      # Windows 使用 Compress-Archive
+      Compress-Archive -Path "$PACKAGE_DIR/*" -DestinationPath $ARCHIVE_NAME
+    }
+    
+    Write-Output "ARCHIVE_PATH=$ARCHIVE_NAME" | Out-File -FilePath $env:GITHUB_ENV -Append
+    Write-Output "PACKAGE_DIR=$PACKAGE_DIR" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+- name: Upload artifact
+  uses: actions/upload-artifact@v4
+  with:
+    name: ${{ env.APP_NAME }}-${{ matrix.platform.name }}
+    path: |
+      ${{ env.ARCHIVE_PATH }}
+    retention-days: 1
+
+create-release:
+  name: Create Release
+  runs-on: ubuntu-latest
+  needs: build-and-package
+  outputs:
+    upload_url: ${{ steps.create_release.outputs.upload_url }}
+  steps:
+    - name: Create Release
+      id: create_release
+      uses: actions/create-release@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        tag_name: ${{ github.ref_name }}
+        release_name: Erebus ${{ github.ref_name }}
+        draft: false
+        body: |
+          ## Erebus ${{ github.ref_name }}
+          
+          多平台发布版本，包含可执行文件和配置文件。
+          
+          ### 下载
+          - **Linux AMD64**: `erebus_${{ github.ref_name }}_linux-amd64.tar.gz`
+          - **Linux ARM64**: `erebus_${{ github.ref_name }}_linux-arm64.tar.gz`
+          - **Windows AMD64**: `erebus_${{ github.ref_name }}_windows-amd64.zip`
+          - **macOS AMD64**: `erebus_${{ github.ref_name }}_darwin-amd64.tar.gz`
+          - **macOS ARM64**: `erebus_${{ github.ref_name }}_darwin-arm64.tar.gz`
+          
+          ### 包含内容
+          每个包包含：
+          - `erebus` (或 `erebus.exe`) - 主程序
+          - `etc/erebus.yaml` - 配置文件
+
+upload-release:
+  name: Upload to Release
+  runs-on: ubuntu-latest
+  needs: [create-release, build-and-package]
+  strategy:
+    matrix:
+      platform:
+        - name: linux-amd64
+          archive_format: tar.gz
+        - name: linux-arm64
+          archive_format: tar.gz
+        - name: windows-amd64
+          archive_format: zip
+        - name: darwin-amd64
+          archive_format: tar.gz
+        - name: darwin-arm64
+          archive_format: tar.gz
+
+  steps:
+    - name: Download artifact
+      uses: actions/download-artifact@v4
+      with:
+        name: ${{ env.APP_NAME }}-${{ matrix.platform.name }}
+        path: ./artifacts
+
+    - name: Upload to Release
+      uses: actions/upload-release-asset@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        upload_url: ${{ needs.create-release.outputs.upload_url }}
+        asset_path: ./artifacts/${{ env.APP_NAME }}_${{ github.ref_name }}_${{ matrix.platform.name }}.${{ matrix.platform.archive_format }}
+        asset_name: ${{ env.APP_NAME }}_${{ github.ref_name }}_${{ matrix.platform.name }}.${{ matrix.platform.archive_format }}
+        asset_content_type: application/octet-stream
