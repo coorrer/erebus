@@ -55,7 +55,11 @@ func NewSyncer(ctx context.Context, cfg config.Config, taskConfig config.SyncTas
 	}
 
 	// 初始化位置管理器
-	positionManager := position.NewPositionManager(cfg.PositionStoragePath)
+	positionManager, err := position.NewPositionManager(cfg.PositionStoragePath)
+	if err != nil {
+		cancel()
+		return nil, fmt.Errorf("初始化positionManager失败,err:%v,PositionStoragePath:%v", err, cfg.PositionStoragePath)
+	}
 
 	// 初始化Canal
 	canalCfg := canal.NewDefaultConfig()
