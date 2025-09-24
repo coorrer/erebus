@@ -102,7 +102,7 @@ jobs:
           
           # 创建说明文件
           cat > $PACKAGE_DIR/README.txt << EOF
-  Erebus ${{ github.ref_name }} - ${{ matrix.platform.name }}
+          Erebus ${{ github.ref_name }} - ${{ matrix.platform.name }}
 
 包含文件:
   - $BINARY: 主程序
