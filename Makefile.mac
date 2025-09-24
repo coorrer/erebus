@@ -1,0 +1,125 @@
+# macOS 特定的配置
+BINARY_NAME := $(SERVICE_NAME)
+
+# 默认目标
+.PHONY: all
+all: build
+
+# macOS 构建
+.PHONY: build
+build:
+	@echo "Building $(SERVICE_NAME) $(VERSION) for macOS..."
+	CGO_ENABLED=$(CGO_ENABLED) $(GO_BUILD) -ldflags="$(GO_LDFLAGS)" -o $(BINARY_NAME) .
+
+# 安装到 GOPATH/bin
+.PHONY: install
+install: build
+	@echo "Installing to $(shell go env GOPATH)/bin..."
+	cp $(BINARY_NAME) $(shell go env GOPATH)/bin/$(BINARY_NAME)
+
+# 运行测试
+.PHONY: test
+test:
+	@echo "Running tests..."
+	$(GO_TEST) -v -race -cover ./...
+
+# 测试覆盖率
+.PHONY: coverage
+coverage:
+	@echo "Generating test coverage report..."
+	$(GO_TEST) -race -coverprofile=coverage.out ./...
+	$(GO) tool cover -html=coverage.out -o coverage.html
+	@echo "Coverage report generated: coverage.html"
+
+# 清理构建文件
+.PHONY: clean
+clean:
+	@echo "Cleaning build artifacts..."
+	rm -f $(BINARY_NAME)
+	rm -rf $(DIST_DIR)
+	rm -f *.log coverage.out coverage.html
+
+# 多平台交叉编译
+.PHONY: cross-build
+cross-build:
+	@echo "Building for multiple platforms..."
+	@mkdir -p $(DIST_DIR)
+
+	# Linux
+	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 $(GO_BUILD) -ldflags="$(GO_LDFLAGS)" -o $(DIST_DIR)/$(BINARY_NAME)-linux-amd64 .
+	GOOS=linux GOARCH=arm64 CGO_ENABLED=0 $(GO_BUILD) -ldflags="$(GO_LDFLAGS)" -o $(DIST_DIR)/$(BINARY_NAME)-linux-arm64 .
+
+	# macOS
+	GOOS=darwin GOARCH=amd64 CGO_ENABLED=0 $(GO_BUILD) -ldflags="$(GO_LDFLAGS)" -o $(DIST_DIR)/$(BINARY_NAME)-darwin-amd64 .
+	GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 $(GO_BUILD) -ldflags="$(GO_LDFLAGS)" -o $(DIST_DIR)/$(BINARY_NAME)-darwin-arm64 .
+
+	# Windows
+	GOOS=windows GOARCH=amd64 CGO_ENABLED=0 $(GO_BUILD) -ldflags="$(GO_LDFLAGS)" -o $(DIST_DIR)/$(BINARY_NAME)-windows-amd64.exe .
+	GOOS=windows GOARCH=arm64 CGO_ENABLED=0 $(GO_BUILD) -ldflags="$(GO_LDFLAGS)" -o $(DIST_DIR)/$(BINARY_NAME)-windows-arm64.exe .
+
+	@echo "Build complete. Binaries available in $(DIST_DIR)/"
+
+# 生成校验和
+.PHONY: checksum
+checksum: cross-build
+	@echo "Generating checksums..."
+	cd $(DIST_DIR) && shasum -a 256 * > $(BINARY_NAME)-$(VERSION)-checksums.txt
+	@echo "Checksums generated: $(DIST_DIR)/$(BINARY_NAME)-$(VERSION)-checksums.txt"
+
+# 显示版本信息
+.PHONY: version
+version:
+	@echo "Version:    $(VERSION)"
+	@echo "Commit:     $(COMMIT)"
+	@echo "Build Time: $(BUILD_TIME)"
+	@echo "Go Version: $(GO_VERSION)"
+
+# GoReleaser 相关命令
+.PHONY: release-dry-run
+release-dry-run:
+	@echo "Running GoReleaser in dry-run mode..."
+	goreleaser release --clean --snapshot --skip=publish
+
+.PHONY: release
+release:
+	@echo "Creating release..."
+	goreleaser release --clean
+
+.PHONY: snapshot
+snapshot:
+	@echo "Creating snapshot release..."
+	goreleaser release --clean --snapshot
+
+# macOS 不支持系统服务管理
+.PHONY: system-install generate-service start stop restart status logs
+.PHONY: system-uninstall update-config install-example-config config-status
+.PHONY: enable disable
+system-install generate-service start stop restart status logs \
+system-uninstall update-config install-example-config config-status \
+enable disable:
+	@echo "Error: System service management is not supported on macOS"
+	@echo "These targets are only available on Linux systems"
+	@exit 1
+
+# 显示帮助信息
+.PHONY: help
+help:
+	@echo "Makefile for $(SERVICE_NAME) $(VERSION) (macOS)"
+	@echo ""
+	@echo "Usage:"
+	@echo "  make                    - Build project (current platform)"
+	@echo "  make build              - Build project"
+	@echo "  make install            - Install to GOPATH/bin"
+	@echo "  make test               - Run tests"
+	@echo "  make coverage           - Generate test coverage report"
+	@echo "  make clean              - Clean build artifacts"
+	@echo "  make cross-build        - Cross-compile for multiple platforms"
+	@echo "  make checksum           - Generate checksums"
+	@echo "  make version            - Show version info"
+	@echo ""
+	@echo "Release:"
+	@echo "  make release-dry-run   - Test release process"
+	@echo "  make snapshot          - Create snapshot release"
+	@echo "  make release           - Create official release"
+	@echo ""
+	@echo "Note: System service management targets are not available on macOS"

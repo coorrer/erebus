@@ -1,0 +1,34 @@
+# Windows 特定的构建配置
+BINARY_NAME := $(SERVICE_NAME).exe
+
+# 默认目标
+.PHONY: all
+all: build
+
+# Windows 构建 - 唯一支持的功能
+.PHONY: build
+build:
+	@echo "Building $(SERVICE_NAME) $(VERSION) for Windows..."
+	@set CGO_ENABLED=$(CGO_ENABLED) && $(GO_BUILD) -ldflags="$(GO_LDFLAGS)" -o $(BINARY_NAME) .
+
+# Windows 清理
+.PHONY: clean
+clean:
+	@echo "Cleaning build artifacts..."
+	@if exist $(BINARY_NAME) del /Q $(BINARY_NAME)
+	@if exist $(DIST_DIR) rmdir /S /Q $(DIST_DIR)
+	@if exist *.log del /Q *.log
+	@if exist coverage.out del /Q coverage.out
+	@if exist coverage.html del /Q coverage.html
+
+# 其他所有目标在 Windows 上都不支持
+.PHONY: install test coverage cross-build checksum version help
+.PHONY: system-install generate-service start stop restart status logs
+.PHONY: system-uninstall update-config install-example-config config-status
+.PHONY: release-dry-run release snapshot
+install test coverage cross-build checksum version help \
+system-install generate-service start stop restart status logs \
+system-uninstall update-config install-example-config config-status \
+release-dry-run release snapshot:
+	@echo "Error: This target is not supported on Windows"
+	@exit 1
