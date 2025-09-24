@@ -22,32 +22,27 @@ jobs:
             goos: linux
             goarch: amd64
             archive_format: tar.gz
-            shell: bash
           - name: linux-arm64
             runner: ubuntu-latest
             goos: linux
             goarch: arm64
             archive_format: tar.gz
-            shell: bash
           - name: windows-amd64
             runner: windows-latest
             goos: windows
             goarch: amd64
             archive_format: zip
             binary_ext: .exe
-            shell: pwsh  # 使用 PowerShell
           - name: darwin-amd64
             runner: macos-latest
             goos: darwin
             goarch: amd64
             archive_format: tar.gz
-            shell: bash
           - name: darwin-arm64
             runner: macos-latest
             goos: darwin
             goarch: arm64
             archive_format: tar.gz
-            shell: bash
 
     steps:
       - name: Checkout code
@@ -67,41 +62,47 @@ jobs:
           make
 
       - name: Verify binary
-        shell: ${{ matrix.platform.shell }}
         run: |
-          $BINARY = "${{ env.APP_NAME }}${{ matrix.platform.binary_ext || '' }}"
-          if (-Not (Test-Path $BINARY)) {
-            Write-Error "Error: Binary $BINARY not found!"
-            Get-ChildItem
-            exit 1
-          }
-          # 检查二进制文件类型（Linux/Mac）
-          if ("${{ matrix.platform.goos }}" -ne "windows") {
+          if [ "${{ matrix.platform.goos }}" = "windows" ]; then
+            # Windows 使用 PowerShell 语法
+            if (-Not (Test-Path "${{ env.APP_NAME }}${{ matrix.platform.binary_ext || '' }}")) {
+              Write-Error "Error: Binary ${{ env.APP_NAME }}${{ matrix.platform.binary_ext || '' }} not found!"
+              Get-ChildItem
+              exit 1
+            }
+          else
+            # Linux/Mac 使用 bash 语法
+            BINARY="${{ env.APP_NAME }}${{ matrix.platform.binary_ext || '' }}"
+            if [ ! -f "$BINARY" ]; then
+              echo "Error: Binary $BINARY not found!"
+              ls -la
+              exit 1
+            fi
             file $BINARY
             chmod +x $BINARY
-          }
+          fi
 
       - name: Create package directory
-        shell: ${{ matrix.platform.shell }}
         run: |
-          $PACKAGE_DIR = "${{ env.APP_NAME }}_${{ github.ref_name }}_${{ matrix.platform.name }}"
-          New-Item -ItemType Directory -Path "$PACKAGE_DIR/${{ env.CONFIG_DIR }}" -Force
+          PACKAGE_DIR="${{ env.APP_NAME }}_${{ github.ref_name }}_${{ matrix.platform.name }}"
+          mkdir -p $PACKAGE_DIR/${{ env.CONFIG_DIR }}
           
           # 复制二进制文件
-          $BINARY = "${{ env.APP_NAME }}${{ matrix.platform.binary_ext || '' }}"
-          Copy-Item $BINARY $PACKAGE_DIR/
-          if ("${{ matrix.platform.goos }}" -ne "windows") {
-            chmod +x "$PACKAGE_DIR/$BINARY"
-          }
+          BINARY="${{ env.APP_NAME }}${{ matrix.platform.binary_ext || '' }}"
+          cp $BINARY $PACKAGE_DIR/
           
-          # 复制配置文件
-          if (Test-Path "${{ env.CONFIG_DIR }}") {
-            Copy-Item -Recurse "${{ env.CONFIG_DIR }}/*" "$PACKAGE_DIR/${{ env.CONFIG_DIR }}/"
-          }
+          if [ "${{ matrix.platform.goos }}" != "windows" ]; then
+            chmod +x $PACKAGE_DIR/$BINARY
+          fi
+          
+          # 复制配置文件（如果存在）
+          if [ -d "${{ env.CONFIG_DIR }}" ]; then
+            cp -r ${{ env.CONFIG_DIR }}/* $PACKAGE_DIR/${{ env.CONFIG_DIR }}/ 2>/dev/null || true
+          fi
           
           # 创建说明文件
-          $README_CONTENT = @"
-          Erebus ${{ github.ref_name }} - ${{ matrix.platform.name }}
+          cat > $PACKAGE_DIR/README.txt << EOF
+  Erebus ${{ github.ref_name }} - ${{ matrix.platform.name }}
 
 包含文件:
   - $BINARY: 主程序
@@ -109,37 +110,35 @@ jobs:
 
 运行方式:
   ./$BINARY
-  "@
-  Set-Content -Path "$PACKAGE_DIR/README.txt" -Value $README_CONTENT
+  EOF
 
 - name: Create archive
-  shell: ${{ matrix.platform.shell }}
   run: |
-    $PACKAGE_DIR = "${{ env.APP_NAME }}_${{ github.ref_name }}_${{ matrix.platform.name }}"
-    $ARCHIVE_NAME = "${{ env.APP_NAME }}_${{ github.ref_name }}_${{ matrix.platform.name }}.${{ matrix.platform.archive_format }}"
+    PACKAGE_DIR="${{ env.APP_NAME }}_${{ github.ref_name }}_${{ matrix.platform.name }}"
+    ARCHIVE_NAME="${{ env.APP_NAME }}_${{ github.ref_name }}_${{ matrix.platform.name }}.${{ matrix.platform.archive_format }}"
     
-    if ("${{ matrix.platform.archive_format }}" -eq "tar.gz") {
+    if [ "${{ matrix.platform.archive_format }}" = "tar.gz" ]; then
       tar -czf $ARCHIVE_NAME $PACKAGE_DIR
-    } else {
-      # Windows 使用 Compress-Archive
-      Compress-Archive -Path "$PACKAGE_DIR/*" -DestinationPath $ARCHIVE_NAME
-    }
+    else
+      # Windows 使用 7z（GitHub Windows 环境自带）
+      7z a $ARCHIVE_NAME $PACKAGE_DIR\\
+    fi
     
-    Write-Output "ARCHIVE_PATH=$ARCHIVE_NAME" | Out-File -FilePath $env:GITHUB_ENV -Append
-    Write-Output "PACKAGE_DIR=$PACKAGE_DIR" | Out-File -FilePath $env:GITHUB_ENV -Append
+    echo "ARCHIVE_PATH=$ARCHIVE_NAME" >> $GITHUB_ENV
+    echo "PACKAGE_DIR=$PACKAGE_DIR" >> $GITHUB_ENV
 
 - name: Upload artifact
   uses: actions/upload-artifact@v4
   with:
     name: ${{ env.APP_NAME }}-${{ matrix.platform.name }}
-    path: |
-      ${{ env.ARCHIVE_PATH }}
+    path: ${{ env.ARCHIVE_PATH }}
     retention-days: 1
 
 create-release:
   name: Create Release
   runs-on: ubuntu-latest
   needs: build-and-package
+  if: startsWith(github.ref, 'refs/tags/v')
   outputs:
     upload_url: ${{ steps.create_release.outputs.upload_url }}
   steps:
@@ -152,6 +151,7 @@ create-release:
         tag_name: ${{ github.ref_name }}
         release_name: Erebus ${{ github.ref_name }}
         draft: false
+        prerelease: false
         body: |
           ## Erebus ${{ github.ref_name }}
           
@@ -167,12 +167,13 @@ create-release:
           ### 包含内容
           每个包包含：
           - `erebus` (或 `erebus.exe`) - 主程序
-          - `etc/erebus.yaml` - 配置文件
+          - `etc/` - 配置文件目录
 
 upload-release:
   name: Upload to Release
   runs-on: ubuntu-latest
   needs: [create-release, build-and-package]
+  if: startsWith(github.ref, 'refs/tags/v')
   strategy:
     matrix:
       platform:

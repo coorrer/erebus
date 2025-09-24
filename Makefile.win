@@ -8,7 +8,7 @@ all: build
 # Windows 构建 - 使用 Windows 兼容的命令
 .PHONY: build
 build:
-	@echo "Building $(SERVICE_NAME) v$(VERSION) for Windows..."
+	@echo "Building $(SERVICE_NAME) $(VERSION) for Windows..."
 	@set CGO_ENABLED=$(CGO_ENABLED)
 	$(GO_BUILD) $(GO_VENDOR) -ldflags="$(GO_LDFLAGS)" -o $(BINARY_NAME) .
 
