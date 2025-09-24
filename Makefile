@@ -51,7 +51,7 @@ ifeq ($(DETECTED_OS),Windows)
     CONF_DIR ?= $(PREFIX)\config
     LOG_DIR ?= $(PREFIX)\logs
     SERVICE_USER ?= Administrator
-    SERVICE_GROUP ?: Administrators
+    SERVICE_GROUP ?= Administrators
 else
     # Linux路径
     PREFIX ?= /usr/local
