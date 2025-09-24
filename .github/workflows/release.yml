@@ -186,28 +186,44 @@ jobs:
           Set-Content -Path "$packageDir\README.txt" -Value $readmeContent -Encoding UTF8
           Write-Host "Package created: $packageDir"
 
-      # 8. 生成压缩包（跨平台兼容）
-      - name: Create archive
+      # -------------------------- 修复核心：拆分压缩步骤 --------------------------
+      # 8. 生成压缩包（Linux/macOS 专用，bash 语法）
+      - name: Create archive (Linux/macOS)
+        if: matrix.platform.goos != 'windows'
         run: |
           # 定义压缩包名称与路径
           PACKAGE_DIR="${{ env.APP_NAME }}_${{ github.ref_name }}_${{ matrix.platform.name }}"
           ARCHIVE_NAME="${{ env.APP_NAME }}_${{ github.ref_name }}_${{ matrix.platform.name }}.${{ matrix.platform.archive_format }}"
           
-          # 按平台选择压缩命令
-          if [ "${{ matrix.platform.archive_format }}" = "tar.gz" ]; then
-            # Linux/macOS：用 tar 压缩（保留权限）
-            tar -czf "$ARCHIVE_NAME" "$PACKAGE_DIR"
-          else
-            # Windows：用 7z 压缩（GitHub Windows 环境自带 7z）
-            7z a -tzip "$ARCHIVE_NAME" "$PACKAGE_DIR\*"
-          fi
+          # Linux/macOS 用 tar 压缩（保留权限）
+          tar -czf "$ARCHIVE_NAME" "$PACKAGE_DIR"
           
           # 输出压缩包信息（供后续步骤使用）
           echo "ARCHIVE_PATH=$ARCHIVE_NAME" >> $GITHUB_ENV
           echo "PACKAGE_DIR=$PACKAGE_DIR" >> $GITHUB_ENV
           echo "Archive created: $ARCHIVE_NAME (size: $(du -sh $ARCHIVE_NAME | cut -f1))"
 
-      # 9. 上传压缩包为 Artifact（便于后续发布）
+      # 9. 生成压缩包（Windows 专用，PowerShell 语法）
+      - name: Create archive (Windows)
+        if: matrix.platform.goos == 'windows'
+        run: |
+          # 定义变量（PowerShell 语法）
+          $packageDir = "${{ env.APP_NAME }}_${{ github.ref_name }}_${{ matrix.platform.name }}"
+          $archiveName = "${{ env.APP_NAME }}_${{ github.ref_name }}_${{ matrix.platform.name }}.${{ matrix.platform.archive_format }}"
+          
+          # Windows 用 7z 压缩（明确指定 zip 格式）
+          7z a -tzip $archiveName "$packageDir\*"
+          
+          # 输出压缩包信息（供后续步骤使用，PowerShell 环境变量设置方式）
+          echo "ARCHIVE_PATH=$archiveName" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          echo "PACKAGE_DIR=$packageDir" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          # 计算压缩包大小（PowerShell 语法）
+          $archiveSize = (Get-Item $archiveName).Length / 1MB
+          Write-Host "Archive created: $archiveName (size: $($archiveSize.ToString('0.00')) MB)"
+
+      # --------------------------------------------------------------------------
+
+      # 10. 上传压缩包为 Artifact（便于后续发布）
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
