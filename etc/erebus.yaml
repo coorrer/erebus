@@ -1,0 +1,47 @@
+Name: erebus
+Log:
+  Level: info
+  Mode: file
+  Path: /var/log/erebus
+
+PositionStoragePath: /var/run/erebus/position
+
+DataSources:
+  - Name: mysql_test
+    Type: mysql
+    Host: 127.0.0.1
+    Port: 3306
+    User: root
+    Password: 123456
+    ServerID: 1001
+  - Name: clickhouse_test
+    Type: clickhouse
+    Host: localhost
+    Port: 9000
+    Database: db_test
+    User: default
+    Password:
+
+SyncTasks:
+  - Name: user_data_sync
+    Enabled: true
+    MysqlSource: mysql_test
+    ClickHouseTarget: clickhouse_test
+    Description: "用户数据同步"
+    Tables:
+      - SourceDatabase: db_test
+        SourceTable: user
+        TargetDatabase: db_test
+        TargetTable: user
+        ColumnMappings:
+          - Source: id
+            Target: user_id
+            Type: UInt64
+            Required: true
+          - Source: nickname
+            Target: nickname
+            Type: String
+            Transform: toUpperCase
+        BatchSize: 1000
+        BatchTimeout: 1s
+        OnConflict: "REPLACE"
