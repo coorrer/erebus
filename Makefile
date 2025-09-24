@@ -110,6 +110,7 @@ generate-service:
 		echo "Creating a basic template..."; \
 		echo '[Unit]' > $(SERVICE_TEMPLATE); \
 		echo 'Description=Erebus Service' >> $(SERVICE_TEMPLATE); \
+		echo 'Documentation=https://github.com/coorrer/erebus' >> $(SERVICE_TEMPLATE); \
 		echo 'After=network.target' >> $(SERVICE_TEMPLATE); \
 		echo '' >> $(SERVICE_TEMPLATE); \
 		echo '[Service]' >> $(SERVICE_TEMPLATE); \
