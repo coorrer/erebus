@@ -52,31 +52,29 @@ jobs:
             goos: darwin
             goarch: arm64
             archive_format: tar.gz
+
     outputs:
       target_tag: ${{ steps.get_tag.outputs.tag }}
       archive_names: ${{ steps.set_archive_name_unix.outputs.archive_name || steps.set_archive_name_win.outputs.archive_name }}
-    steps:
-      # 修复：统一使用 Bash 获取 Tag（跨平台兼容）
-      - name: Get target tag (All platforms)
-        id: get_tag_universal
-        shell: bash
-        run: |
-          if [ "${{ github.event_name }}" = "push" ]; then
-            echo "tag=${{ github.ref_name }}" >> $GITHUB_OUTPUT
-          else
-            echo "tag=${{ github.event.inputs.tag_name }}" >> $GITHUB_OUTPUT
-          fi
-          # 调试：打印获取到的原始Tag
-          echo "原始Tag值: ${{ github.ref_name || github.event.inputs.tag_name }}"
 
-      # 统一标签输出（直接使用跨平台获取的Tag）
-      - name: Combine tag output
+    steps:
+      - name: Get target tag
         id: get_tag
         shell: bash
         run: |
-          echo "tag=${{ steps.get_tag_universal.outputs.tag }}" >> $GITHUB_OUTPUT
-          # 调试：打印最终Tag，确认非空
-          echo "最终使用的Tag: ${{ steps.get_tag_universal.outputs.tag }}"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG="${{ github.event.inputs.tag_name }}"
+          else
+            TAG="${{ github.ref_name }}"
+          fi
+          
+          # 验证标签格式
+          if [[ ! $TAG =~ ^v[0-9]+\.[0-9]+\.[0-9]+ ]]; then
+            echo "警告: 标签格式不符合预期: $TAG"
+          fi
+          
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+          echo "最终标签: $TAG"
 
       - name: Checkout code
         uses: actions/checkout@v4
@@ -90,6 +88,19 @@ jobs:
           go-version: '1.21'
           cache: true
           cache-dependency-path: go.sum
+
+      - name: Cache Go modules
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-
+
+      - name: Run tests
+        run: go test -v ./...
 
       - name: Build with Makefile
         env:
@@ -109,6 +120,7 @@ jobs:
           fi
           file "$BINARY"
           chmod +x "$BINARY"
+          echo "✅ 二进制文件验证成功: $BINARY"
 
       - name: Verify binary (Windows)
         if: matrix.platform.goos == 'windows'
@@ -120,72 +132,108 @@ jobs:
             exit 1
           }
           Get-Item $binary
-          Write-Host "Windows 二进制文件路径: $binary"
+          Write-Host "✅ Windows 二进制文件验证成功: $binary"
 
       - name: Create package and archive (Linux/macOS)
         if: matrix.platform.goos != 'windows'
         id: set_archive_name_unix
         run: |
-          TAG=${{ steps.get_tag.outputs.tag }}
+          # 统一标签获取逻辑
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG="${{ github.event.inputs.tag_name }}"
+          else
+            TAG="${{ github.ref_name }}"
+          fi
+          
+          # 如果标签为空，使用默认值
+          if [ -z "$TAG" ]; then
+            TAG="unknown"
+            echo "警告: 标签为空，使用默认值: $TAG"
+          fi
+          
           ARCHIVE_NAME="${{ env.APP_NAME }}_${TAG}_${{ matrix.platform.name }}.${{ matrix.platform.archive_format }}"
+          echo "生成压缩包名称: $ARCHIVE_NAME"
           
           PACKAGE_DIR="${{ env.APP_NAME }}_${TAG}_${{ matrix.platform.name }}"
           mkdir -p "$PACKAGE_DIR/${{ env.CONFIG_DIR }}"
           cp "${{ env.APP_NAME }}${{ matrix.platform.binary_ext || '' }}" "$PACKAGE_DIR/"
           chmod +x "$PACKAGE_DIR/${{ env.APP_NAME }}${{ matrix.platform.binary_ext || '' }}"
           
+          # 复制配置文件
           if [ -d "${{ env.CONFIG_DIR }}" ]; then
             cp -r "${{ env.CONFIG_DIR }}"/* "$PACKAGE_DIR/${{ env.CONFIG_DIR }}/" 2>/dev/null || true
+            echo "配置文件已复制到包中"
+          else
+            echo "警告: 配置目录 ${{ env.CONFIG_DIR }} 不存在"
           fi
           
+          # 创建压缩包
           tar -czf "$ARCHIVE_NAME" "$PACKAGE_DIR"
+          
+          # 验证压缩包
+          if [ ! -f "$ARCHIVE_NAME" ]; then
+            echo "错误: 压缩包创建失败!"
+            exit 1
+          fi
           
           echo "ARCHIVE_PATH=$ARCHIVE_NAME" >> $GITHUB_ENV
           echo "archive_name=$ARCHIVE_NAME" >> $GITHUB_OUTPUT
-          echo "Created archive: $ARCHIVE_NAME"
+          echo "✅ 压缩包创建成功: $ARCHIVE_NAME"
+          echo "文件大小: $(du -h $ARCHIVE_NAME | cut -f1)"
 
       - name: Create package and archive (Windows)
         if: matrix.platform.goos == 'windows'
         id: set_archive_name_win
         run: |
-          # 修复：直接从环境变量获取Tag，避免PowerShell变量解析问题
-          $tag = "${{ steps.get_tag.outputs.tag }}"
-          
-          # 调试：强制打印Tag值，确认是否为空
-          Write-Host "Windows 打包步骤获取的Tag: '$tag'"
-          
-          # 修复：如果Tag为空，强制报错中断流程
-          if ([string]::IsNullOrEmpty($tag)) {
-            Write-Error "Tag变量为空！无法生成正确文件名"
-            exit 1
+          # 统一标签获取逻辑
+          if ("${{ github.event_name }}" -eq "workflow_dispatch") {
+            $tag = "${{ github.event.inputs.tag_name }}"
+          } else {
+            $tag = "${{ github.ref_name }}"
           }
           
-          $archiveName = "${{ env.APP_NAME }}_$tag_${{ matrix.platform.name }}.${{ matrix.platform.archive_format }}"
-          Write-Host "Windows 生成的压缩包名称: $archiveName"
+          # 如果标签为空，使用默认值
+          if ([string]::IsNullOrEmpty($tag)) {
+            $tag = "unknown"
+            Write-Host "警告: 标签为空，使用默认值: $tag"
+          }
           
-          $packageDir = "${{ env.APP_NAME }}_$tag_${{ matrix.platform.name }}"
+          Write-Host "最终使用的Tag: '$tag'"
+          
+          $archiveName = "${{ env.APP_NAME }}_$($tag)_${{ matrix.platform.name }}.${{ matrix.platform.archive_format }}"
+          Write-Host "生成的压缩包名称: $archiveName"
+          
+          $packageDir = "${{ env.APP_NAME }}_$($tag)_${{ matrix.platform.name }}"
           $binary = "${{ env.APP_NAME }}${{ matrix.platform.binary_ext || '' }}"
           
+          # 创建目录结构
           New-Item -ItemType Directory -Path "$packageDir\${{ env.CONFIG_DIR }}" -Force | Out-Null
           Copy-Item -Path $binary -Destination "$packageDir\" -Force
           
+          # 复制配置文件
           if (Test-Path "${{ env.CONFIG_DIR }}" -PathType Container) {
             Copy-Item -Path "${{ env.CONFIG_DIR }}\*" -Destination "$packageDir\${{ env.CONFIG_DIR }}\" -Recurse -Force
+            Write-Host "配置文件已复制到包中"
+          } else {
+            Write-Host "警告: 配置目录 ${{ env.CONFIG_DIR }} 不存在"
           }
           
-          7z a -tzip $archiveName "$packageDir\*"
+          # 使用 PowerShell 内置压缩工具
+          Compress-Archive -Path "$packageDir\*" -DestinationPath $archiveName -Force
           
-          # 修复：使用echo输出环境变量（PowerShell兼容方式）
+          # 验证压缩包
+          if (-not (Test-Path $archiveName -PathType Leaf)) {
+            Write-Error "错误: 压缩包创建失败!"
+            exit 1
+          }
+          
+          # 设置输出变量
           echo "ARCHIVE_PATH=$archiveName" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8NoBOM
           echo "archive_name=$archiveName" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8NoBOM
           
-          # 调试：显示生成的文件
-          Write-Host "当前目录文件列表:"
-          Get-ChildItem
-          if (-not (Test-Path $archiveName -PathType Leaf)) {
-            Write-Error "压缩包生成失败: $archiveName"
-            exit 1
-          }
+          Write-Host "✅ 压缩包创建成功: $archiveName"
+          $fileSize = (Get-Item $archiveName).Length
+          Write-Host "文件大小: $([math]::Round($fileSize/1MB, 2)) MB"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -194,7 +242,6 @@ jobs:
           path: ${{ env.ARCHIVE_PATH }}
           retention-days: 3
           if-no-files-found: error
-          include-hidden-files: false
 
   create-release:
     name: Create Draft Release
@@ -216,9 +263,10 @@ jobs:
             try {
               const oldRelease = await octokit.rest.repos.getReleaseByTag({ owner, repo, tag: tagName });
               await octokit.rest.repos.deleteRelease({ owner, repo, release_id: oldRelease.data.id });
-              console.log(`Deleted old release for tag: ${tagName}`);
+              console.log(`✅ 删除旧 Release: ${tagName}`);
             } catch (error) {
               if (error.status !== 404) throw error;
+              console.log(`ℹ️ 未找到已存在的 Release: ${tagName}`);
             }
             
             try {
@@ -226,10 +274,10 @@ jobs:
               const draftRelease = releases.data.find(r => r.tag_name === tagName && r.draft);
               if (draftRelease) {
                 await octokit.rest.repos.deleteRelease({ owner, repo, release_id: draftRelease.id });
-                console.log(`Deleted draft release for tag: ${tagName}`);
+                console.log(`✅ 删除草稿 Release: ${tagName}`);
               }
             } catch (error) {
-              console.log(`No draft release found for tag: ${tagName}`);
+              console.log(`ℹ️ 未找到草稿 Release: ${tagName}`);
             }
 
       - name: Create draft Release
@@ -244,12 +292,25 @@ jobs:
           prerelease: false
           body: |
             ## Erebus ${{ needs.build-and-package.outputs.target_tag }}
-            ### 下载链接
-            - Linux AMD64: erebus_${{ needs.build-and-package.outputs.target_tag }}_linux-amd64.tar.gz
-            - Linux ARM64: erebus_${{ needs.build-and-package.outputs.target_tag }}_linux-arm64.tar.gz
-            - Windows AMD64: erebus_${{ needs.build-and-package.outputs.target_tag }}_windows-amd64.zip
-            - macOS AMD64: erebus_${{ needs.build-and-package.outputs.target_tag }}_darwin-amd64.tar.gz
-            - macOS ARM64: erebus_${{ needs.build-and-package.outputs.target_tag }}_darwin-arm64.tar.gz
+            
+            ### 🚀 新特性
+            - 自动化构建和发布
+            - 多平台支持
+            
+            ### 📦 下载链接
+            - **Linux AMD64**: `erebus_${{ needs.build-and-package.outputs.target_tag }}_linux-amd64.tar.gz`
+            - **Linux ARM64**: `erebus_${{ needs.build-and-package.outputs.target_tag }}_linux-arm64.tar.gz`
+            - **Windows AMD64**: `erebus_${{ needs.build-and-package.outputs.target_tag }}_windows-amd64.zip`
+            - **macOS AMD64**: `erebus_${{ needs.build-and-package.outputs.target_tag }}_darwin-amd64.tar.gz`
+            - **macOS ARM64**: `erebus_${{ needs.build-and-package.outputs.target_tag }}_darwin-arm64.tar.gz`
+            
+            ### 🔧 使用说明
+            1. 下载对应平台的压缩包
+            2. 解压文件
+            3. 运行可执行文件
+            
+            ### 📋 校验和
+            SHA256 校验和将在文件上传后自动生成。
 
   upload-to-release:
     name: Upload ${{ matrix.platform.name }} to Release
@@ -269,6 +330,7 @@ jobs:
             archive_format: tar.gz
           - name: darwin-arm64
             archive_format: tar.gz
+
     steps:
       - name: Download artifact
         uses: actions/download-artifact@v4
@@ -277,16 +339,44 @@ jobs:
           path: ./artifacts
           merge-multiple: false
 
-      - name: Show downloaded files
+      - name: Show downloaded files and find correct archive
         run: |
           echo "Artifacts directory contents:"
           ls -la ./artifacts
-          TARGET_FILE="${{ env.APP_NAME }}_${{ needs.create-release.outputs.target_tag }}_${{ matrix.platform.name }}.${{ matrix.platform.archive_format }}"
-          if [ -f "./artifacts/$TARGET_FILE" ]; then
-            echo "Found target file: $TARGET_FILE"
+          
+          # 动态查找匹配的文件
+          TARGET_PATTERN="${{ env.APP_NAME }}_*_${{ matrix.platform.name }}.${{ matrix.platform.archive_format }}"
+          echo "查找模式: $TARGET_PATTERN"
+          
+          TARGET_FILE=$(find ./artifacts -name "$TARGET_PATTERN" -type f | head -1)
+          if [ -n "$TARGET_FILE" ]; then
+            echo "✅ 找到目标文件: $TARGET_FILE"
+            # 获取文件名（不含路径）
+            FILENAME=$(basename "$TARGET_FILE")
+            echo "文件名: $FILENAME"
+          
+            # 重命名为期望的文件名（如果需要）
+            EXPECTED_NAME="${{ env.APP_NAME }}_${{ needs.create-release.outputs.target_tag }}_${{ matrix.platform.name }}.${{ matrix.platform.archive_format }}"
+            if [ "$FILENAME" != "$EXPECTED_NAME" ]; then
+              echo "重命名: $FILENAME -> $EXPECTED_NAME"
+              mv "$TARGET_FILE" "./artifacts/$EXPECTED_NAME"
+              TARGET_FILE="./artifacts/$EXPECTED_NAME"
+            else
+              echo "文件名已符合预期，无需重命名"
+            fi
           else
-            echo "Error: Target file $TARGET_FILE not found!"
-            echo "目标文件期望路径: ./artifacts/$TARGET_FILE"
+            echo "❌ 错误: 未找到匹配的文件!"
+            echo "当前目录下的文件:"
+            find ./artifacts -type f -name "*.${matrix.platform.archive_format}" || echo "未找到压缩文件"
+            exit 1
+          fi
+          
+          # 验证文件存在
+          if [ -f "$TARGET_FILE" ]; then
+            echo "✅ 最终目标文件: $TARGET_FILE"
+            echo "文件大小: $(du -h "$TARGET_FILE" | cut -f1)"
+          else
+            echo "❌ 错误: 目标文件不存在!"
             exit 1
           fi
 
@@ -299,6 +389,28 @@ jobs:
           asset_path: ./artifacts/${{ env.APP_NAME }}_${{ needs.create-release.outputs.target_tag }}_${{ matrix.platform.name }}.${{ matrix.platform.archive_format }}
           asset_name: ${{ env.APP_NAME }}_${{ needs.create-release.outputs.target_tag }}_${{ matrix.platform.name }}.${{ matrix.platform.archive_format }}
           asset_content_type: application/octet-stream
+
+      - name: Generate SHA256 checksum
+        run: |
+          FILE_PATH="./artifacts/${{ env.APP_NAME }}_${{ needs.create-release.outputs.target_tag }}_${{ matrix.platform.name }}.${{ matrix.platform.archive_format }}"
+          if [ -f "$FILE_PATH" ]; then
+            sha256sum "$FILE_PATH" > "$FILE_PATH.sha256"
+            echo "✅ 生成 SHA256 校验和:"
+            cat "$FILE_PATH.sha256"
+          else
+            echo "❌ 错误: 文件不存在，无法生成校验和"
+            exit 1
+          fi
+
+      - name: Upload SHA256 checksum
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ needs.create-release.outputs.upload_url }}
+          asset_path: ./artifacts/${{ env.APP_NAME }}_${{ needs.create-release.outputs.target_tag }}_${{ matrix.platform.name }}.${{ matrix.platform.archive_format }}.sha256
+          asset_name: ${{ env.APP_NAME }}_${{ needs.create-release.outputs.target_tag }}_${{ matrix.platform.name }}.${{ matrix.platform.archive_format }}.sha256
+          asset_content_type: text/plain
 
   publish-release:
     name: Publish Release
@@ -319,4 +431,17 @@ jobs:
               release_id: releaseId,
               draft: false
             });
-            console.log(`Released release with ID: ${releaseId}`);
+            console.log(`✅ 已发布 Release ID: ${releaseId}`);
+            
+            // 获取发布信息
+            const release = await octokit.rest.repos.getRelease({
+              owner,
+              repo,
+              release_id: releaseId
+            });
+            
+            console.log(`📦 Release 信息:`);
+            console.log(`- 标签: ${release.data.tag_name}`);
+            console.log(`- 名称: ${release.data.name}`);
+            console.log(`- 下载次数: ${release.data.assets.length} 个资源文件`);
+            console.log(`- 发布地址: ${release.data.html_url}`);
