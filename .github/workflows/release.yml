@@ -54,10 +54,8 @@ jobs:
             archive_format: tar.gz
     outputs:
       target_tag: ${{ steps.get_tag.outputs.tag }}
-      # 输出所有平台的压缩包名称，确保上传时匹配
       archive_names: ${{ steps.set_archive_name_unix.outputs.archive_name || steps.set_archive_name_win.outputs.archive_name }}
     steps:
-      # 获取标签（平台隔离）
       - name: Get target tag (Linux/macOS)
         if: matrix.platform.goos != 'windows'
         id: get_tag_unix
@@ -72,25 +70,22 @@ jobs:
         if: matrix.platform.goos == 'windows'
         id: get_tag_win
         run: |
-          # 修复：使用 utf8NoBOM 编码，且不使用 -Append（避免空行导致变量解析失败）
           if ("${{ github.event_name }}" -eq "push") {
             Write-Output "tag=${{ github.ref_name }}" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8NoBOM
           } else {
             Write-Output "tag=${{ github.event.inputs.tag_name }}" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8NoBOM
           }
-          # 调试：打印获取到的 Tag，确认是否为空
           Write-Host "Windows 平台获取到的 Tag: ${{ steps.get_tag_win.outputs.tag }}"
 
-      # 统一标签输出（修复：删除冗余的中间步骤，直接根据平台取对应 Tag）
       - name: Combine tag output
         id: get_tag
+        shell: bash
         run: |
           if [ "${{ matrix.platform.goos }}" != "windows" ]; then
             echo "tag=${{ steps.get_tag_unix.outputs.tag }}" >> $GITHUB_OUTPUT
           else
             echo "tag=${{ steps.get_tag_win.outputs.tag }}" >> $GITHUB_OUTPUT
           fi
-          # 调试：打印最终 Tag，确认是否正确
           echo "最终使用的 Tag: ${{ steps.get_tag.outputs.tag }}"
 
       - name: Checkout code
@@ -113,7 +108,6 @@ jobs:
           CGO_ENABLED: 0
         run: make
 
-      # 验证二进制文件
       - name: Verify binary (Linux/macOS)
         if: matrix.platform.goos != 'windows'
         run: |
@@ -136,16 +130,13 @@ jobs:
             exit 1
           }
           Get-Item $binary
-          # 调试：打印二进制文件路径，确认存在
           Write-Host "Windows 二进制文件路径: $binary"
 
-      # 构建压缩包并明确记录文件名（核心修复）
       - name: Create package and archive (Linux/macOS)
         if: matrix.platform.goos != 'windows'
         id: set_archive_name_unix
         run: |
           TAG=${{ steps.get_tag.outputs.tag }}
-          # 明确定义压缩包名称（与上传阶段保持一致）
           ARCHIVE_NAME="${{ env.APP_NAME }}_${TAG}_${{ matrix.platform.name }}.${{ matrix.platform.archive_format }}"
           
           PACKAGE_DIR="${{ env.APP_NAME }}_${TAG}_${{ matrix.platform.name }}"
@@ -159,11 +150,8 @@ jobs:
           
           tar -czf "$ARCHIVE_NAME" "$PACKAGE_DIR"
           
-          # 输出压缩包名称到环境变量
           echo "ARCHIVE_PATH=$ARCHIVE_NAME" >> $GITHUB_ENV
           echo "archive_name=$ARCHIVE_NAME" >> $GITHUB_OUTPUT
-          
-          # 调试：显示当前目录文件
           echo "Created archive:"
           ls -la "$ARCHIVE_NAME"
 
@@ -172,10 +160,8 @@ jobs:
         id: set_archive_name_win
         run: |
           $tag = "${{ steps.get_tag.outputs.tag }}"
-          # 明确定义压缩包名称（与上传阶段保持一致）
           $archiveName = "${{ env.APP_NAME }}_$tag_${{ matrix.platform.name }}.${{ matrix.platform.archive_format }}"
           
-          # 调试：打印最终生成的压缩包名称，确认是否包含 Tag
           Write-Host "Windows 平台生成的压缩包名称: $archiveName"
           
           $packageDir = "${{ env.APP_NAME }}_$tag_${{ matrix.platform.name }}"
@@ -188,20 +174,16 @@ jobs:
             Copy-Item -Path "${{ env.CONFIG_DIR }}\*" -Destination "$packageDir\${{ env.CONFIG_DIR }}\" -Recurse -Force
           }
           
-          # 修复：确保 7z 命令可执行（Windows  runner 自带 7z，无需额外安装）
           7z a -tzip $archiveName "$packageDir\*"
           
-          # 输出压缩包名称到环境变量（PowerShell兼容方式）
           Write-Output "ARCHIVE_PATH=$archiveName" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8NoBOM
           Write-Output "archive_name=$archiveName" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8NoBOM
           
-          # 调试：显示当前目录文件，确认压缩包生成
           Write-Host "Created archive:"
           Get-Item $archiveName
           Write-Host "当前目录所有文件:"
           Get-ChildItem
 
-      # 上传构建产物（明确路径）
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
@@ -209,18 +191,18 @@ jobs:
           path: ${{ env.ARCHIVE_PATH }}
           retention-days: 3
           if-no-files-found: error
-          # 明确 artifact 中的文件路径（无额外目录）
           include-hidden-files: false
 
   create-release:
-    name: Clean Old Release & Create New
+    name: Create Draft Release
     runs-on: ubuntu-latest
     needs: build-and-package
     outputs:
-      upload_url: ${{ steps.create_new_release.outputs.upload_url }}
+      upload_url: ${{ steps.create_draft_release.outputs.upload_url }}
+      release_id: ${{ steps.create_draft_release.outputs.id }}
       target_tag: ${{ needs.build-and-package.outputs.target_tag }}
     steps:
-      - name: Delete old Release if exists
+      - name: Delete old Release (including drafts)
         uses: actions/github-script@v7
         with:
           script: |
@@ -229,23 +211,35 @@ jobs:
             const repo = context.repo.repo;
             
             try {
+              // 先删除正式发布的Release
               const oldRelease = await octokit.rest.repos.getReleaseByTag({ owner, repo, tag: tagName });
               await octokit.rest.repos.deleteRelease({ owner, repo, release_id: oldRelease.data.id });
               console.log(`Deleted old release for tag: ${tagName}`);
             } catch (error) {
-              if (error.status === 404) console.log(`No old release found for tag: ${tagName}`);
-              else throw error;
+              if (error.status !== 404) throw error;
+            }
+            
+            try {
+              // 再删除可能存在的草稿Release
+              const releases = await octokit.rest.repos.listReleases({ owner, repo });
+              const draftRelease = releases.data.find(r => r.tag_name === tagName && r.draft);
+              if (draftRelease) {
+                await octokit.rest.repos.deleteRelease({ owner, repo, release_id: draftRelease.id });
+                console.log(`Deleted draft release for tag: ${tagName}`);
+              }
+            } catch (error) {
+              console.log(`No draft release found for tag: ${tagName}`);
             }
 
-      - name: Create new Release
-        id: create_new_release
+      - name: Create draft Release (可编辑状态)
+        id: create_draft_release
         uses: actions/create-release@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tag_name: ${{ needs.build-and-package.outputs.target_tag }}
           release_name: Erebus ${{ needs.build-and-package.outputs.target_tag }}
-          draft: false
+          draft: true  # 关键：先创建草稿（可变状态）
           prerelease: false
           body: |
             ## Erebus ${{ needs.build-and-package.outputs.target_tag }}
@@ -280,21 +274,17 @@ jobs:
         with:
           name: ${{ env.APP_NAME }}-${{ matrix.platform.name }}
           path: ./artifacts
-          # 确保下载的文件直接放在artifacts目录下（无嵌套）
           merge-multiple: false
 
-      # 调试：显示下载的文件结构（关键排查步骤）
       - name: Show downloaded files
         run: |
           echo "Artifacts directory contents:"
           ls -la ./artifacts
-          # 检查是否存在目标文件
           TARGET_FILE="${{ env.APP_NAME }}_${{ needs.create-release.outputs.target_tag }}_${{ matrix.platform.name }}.${{ matrix.platform.archive_format }}"
           if [ -f "./artifacts/$TARGET_FILE" ]; then
             echo "Found target file: $TARGET_FILE"
           else
             echo "Error: Target file $TARGET_FILE not found!"
-            # 额外调试：打印目标文件路径，帮助定位问题
             echo "目标文件期望路径: ./artifacts/$TARGET_FILE"
             exit 1
           fi
@@ -305,7 +295,28 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           upload_url: ${{ needs.create-release.outputs.upload_url }}
-          # 明确资产路径（与构建阶段的文件名严格一致）
           asset_path: ./artifacts/${{ env.APP_NAME }}_${{ needs.create-release.outputs.target_tag }}_${{ matrix.platform.name }}.${{ matrix.platform.archive_format }}
           asset_name: ${{ env.APP_NAME }}_${{ needs.create-release.outputs.target_tag }}_${{ matrix.platform.name }}.${{ matrix.platform.archive_format }}
           asset_content_type: application/octet-stream
+
+  publish-release:
+    name: Publish Release (发布草稿)
+    runs-on: ubuntu-latest
+    needs: [upload-to-release, create-release]  # 确保所有资产上传完成后再发布
+    steps:
+      - name: Publish draft release
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const releaseId = ${{ needs.create-release.outputs.release_id }};
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            
+            // 将草稿Release改为正式发布（不可变状态）
+            await octokit.rest.repos.updateRelease({
+              owner,
+              repo,
+              release_id: releaseId,
+              draft: false  // 关键：发布草稿
+            });
+            console.log(`Released release with ID: ${releaseId}`);
