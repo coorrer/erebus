@@ -55,7 +55,7 @@ jobs:
     outputs:
       target_tag: ${{ steps.get_tag.outputs.tag }}
       # 输出所有平台的压缩包名称，确保上传时匹配
-      archive_names: ${{ steps.set_archive_name.outputs.archive_name }}
+      archive_names: ${{ steps.set_archive_name_unix.outputs.archive_name || steps.set_archive_name_win.outputs.archive_name }}
     steps:
       # 获取标签（平台隔离）
       - name: Get target tag (Linux/macOS)
@@ -140,7 +140,7 @@ jobs:
       # 构建压缩包并明确记录文件名（核心修复）
       - name: Create package and archive (Linux/macOS)
         if: matrix.platform.goos != 'windows'
-        id: set_archive_name
+        id: set_archive_name_unix
         run: |
           TAG=${{ steps.get_tag.outputs.tag }}
           # 明确定义压缩包名称（与上传阶段保持一致）
@@ -167,7 +167,7 @@ jobs:
 
       - name: Create package and archive (Windows)
         if: matrix.platform.goos == 'windows'
-        id: set_archive_name
+        id: set_archive_name_win
         run: |
           $tag = "${{ steps.get_tag.outputs.tag }}"
           # 明确定义压缩包名称（与上传阶段保持一致）
@@ -299,4 +299,3 @@ jobs:
           asset_path: ./artifacts/${{ env.APP_NAME }}_${{ needs.create-release.outputs.target_tag }}_${{ matrix.platform.name }}.${{ matrix.platform.archive_format }}
           asset_name: ${{ env.APP_NAME }}_${{ needs.create-release.outputs.target_tag }}_${{ matrix.platform.name }}.${{ matrix.platform.archive_format }}
           asset_content_type: application/octet-stream
-    
