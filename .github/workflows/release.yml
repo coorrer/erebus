@@ -54,8 +54,7 @@ jobs:
             archive_format: tar.gz
     outputs:
       target_tag: ${{ steps.get_tag.outputs.tag }}
-      # 输出所有平台的压缩包名称，确保上传时匹配
-      archive_names: ${{ steps.set_archive_name.outputs.archive_name }}
+      archive_names: ${{ steps.set_archive_name_unix.outputs.archive_name || steps.set_archive_name_win.outputs.archive_name }}
     steps:
       # 获取标签（平台隔离）
       - name: Get target tag (Linux/macOS)
@@ -137,13 +136,12 @@ jobs:
           }
           Get-Item $binary
 
-      # 构建压缩包并明确记录文件名（核心修复）
+      # 构建压缩包（Linux/macOS）- 使用唯一ID
       - name: Create package and archive (Linux/macOS)
         if: matrix.platform.goos != 'windows'
-        id: set_archive_name
+        id: set_archive_name_unix  # 唯一ID
         run: |
           TAG=${{ steps.get_tag.outputs.tag }}
-          # 明确定义压缩包名称（与上传阶段保持一致）
           ARCHIVE_NAME="${{ env.APP_NAME }}_${TAG}_${{ matrix.platform.name }}.${{ matrix.platform.archive_format }}"
           
           PACKAGE_DIR="${{ env.APP_NAME }}_${TAG}_${{ matrix.platform.name }}"
@@ -156,21 +154,17 @@ jobs:
           fi
           
           tar -czf "$ARCHIVE_NAME" "$PACKAGE_DIR"
-          
-          # 输出压缩包名称到环境变量
           echo "ARCHIVE_PATH=$ARCHIVE_NAME" >> $GITHUB_ENV
           echo "archive_name=$ARCHIVE_NAME" >> $GITHUB_OUTPUT
-          
-          # 调试：显示当前目录文件
           echo "Created archive:"
           ls -la "$ARCHIVE_NAME"
 
+      # 构建压缩包（Windows）- 使用不同的唯一ID
       - name: Create package and archive (Windows)
         if: matrix.platform.goos == 'windows'
-        id: set_archive_name
+        id: set_archive_name_win  # 不同的唯一ID
         run: |
           $tag = "${{ steps.get_tag.outputs.tag }}"
-          # 明确定义压缩包名称（与上传阶段保持一致）
           $archiveName = "${{ env.APP_NAME }}_$tag_${{ matrix.platform.name }}.${{ matrix.platform.archive_format }}"
           
           $packageDir = "${{ env.APP_NAME }}_$tag_${{ matrix.platform.name }}"
@@ -184,16 +178,12 @@ jobs:
           }
           
           7z a -tzip $archiveName "$packageDir\*"
-          
-          # 输出压缩包名称到环境变量（PowerShell兼容方式）
           Write-Output "ARCHIVE_PATH=$archiveName" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           Write-Output "archive_name=$archiveName" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
-          
-          # 调试：显示当前目录文件
           Write-Host "Created archive:"
           Get-Item $archiveName
 
-      # 上传构建产物（明确路径）
+      # 上传构建产物
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
@@ -201,8 +191,6 @@ jobs:
           path: ${{ env.ARCHIVE_PATH }}
           retention-days: 3
           if-no-files-found: error
-          # 明确 artifact 中的文件路径（无额外目录）
-          include-hidden-files: false
 
   create-release:
     name: Clean Old Release & Create New
@@ -272,15 +260,11 @@ jobs:
         with:
           name: ${{ env.APP_NAME }}-${{ matrix.platform.name }}
           path: ./artifacts
-          # 确保下载的文件直接放在artifacts目录下（无嵌套）
-          merge-multiple: false
 
-      # 调试：显示下载的文件结构（关键排查步骤）
       - name: Show downloaded files
         run: |
           echo "Artifacts directory contents:"
           ls -la ./artifacts
-          # 检查是否存在目标文件
           TARGET_FILE="${{ env.APP_NAME }}_${{ needs.create-release.outputs.target_tag }}_${{ matrix.platform.name }}.${{ matrix.platform.archive_format }}"
           if [ -f "./artifacts/$TARGET_FILE" ]; then
             echo "Found target file: $TARGET_FILE"
@@ -295,7 +279,6 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           upload_url: ${{ needs.create-release.outputs.upload_url }}
-          # 明确资产路径（与构建阶段的文件名严格一致）
           asset_path: ./artifacts/${{ env.APP_NAME }}_${{ needs.create-release.outputs.target_tag }}_${{ matrix.platform.name }}.${{ matrix.platform.archive_format }}
           asset_name: ${{ env.APP_NAME }}_${{ needs.create-release.outputs.target_tag }}_${{ matrix.platform.name }}.${{ matrix.platform.archive_format }}
           asset_content_type: application/octet-stream
