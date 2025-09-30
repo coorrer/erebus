@@ -67,6 +67,8 @@ type SyncTaskTable struct {
 	BatchSize      int64           `json:"BatchSize,default=1000"`
 	BatchTimeout   time.Duration   `json:"BatchTimeout"`
 	OnConflict     string          `json:"OnConflict,optional"`
+	Priority       string          `json:"Priority,optional"`
+	QueueSize      int64           `json:"QueueSize,optional"`
 }
 
 // SyncTask 同步任务配置

@@ -9,6 +9,7 @@ require (
 	github.com/meilisearch/meilisearch-go v0.34.0
 	github.com/segmentio/kafka-go v0.4.49
 	github.com/zeromicro/go-zero v1.9.0
+	golang.org/x/time v0.10.0
 )
 
 require (
