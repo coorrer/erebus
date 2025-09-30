@@ -89,4 +89,5 @@ type Config struct {
 	SyncTasks           []SyncTask      `json:"SyncTasks,optional"`
 	Redis               redis.RedisConf `json:"Redis,optional"`
 	PositionStoragePath string          `json:"PositionStoragePath"`
+	DeadLetterDir       string          `json:"DeadLetterDir"`
 }
