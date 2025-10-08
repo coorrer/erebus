@@ -7,6 +7,8 @@ Log:
 
 PositionStoragePath: /var/run/erebus/position
 
+DeadLetterPath: /var/run/erebus/deadLetter
+
 DataSources:
   - Name: mysql_test
     Type: mysql

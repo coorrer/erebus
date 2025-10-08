@@ -200,8 +200,8 @@ func NewBinlogHandler(ctx context.Context, cfg config.Config, chClient *clickhou
 
 	// 设置死信数据存储目录
 	deadLetterDir := "./dead_letter"
-	if cfg.DeadLetterDir != "" {
-		deadLetterDir = cfg.DeadLetterDir
+	if cfg.DeadLetterPath != "" {
+		deadLetterDir = cfg.DeadLetterPath
 	}
 
 	// 确保目录存在
