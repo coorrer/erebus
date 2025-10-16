@@ -55,12 +55,19 @@ type ColumnMapping struct {
 	Ignore       bool          `json:"Ignore,default=false"`
 	Condition    string        `json:"Condition,optional"`
 	EnumMapping  []EnumMapping `json:"EnumMapping,optional"` // 通用枚举映射
+	SetMapping   []SetMapping  `json:"SetMapping,optional"`  // 通用类型映射定义
 }
 
 // EnumMapping 枚举映射定义
 type EnumMapping struct {
 	Const string `json:"Const"` // 枚举常量(字符串值)
 	Index int64  `json:"Index"` // 枚举索引值
+}
+
+// SetMapping SET 类型映射定义
+type SetMapping struct {
+	Const string `json:"const" yaml:"const"` // SET 常量值
+	Bit   int64  `json:"bit" yaml:"bit"`     // 对应的位值（2的幂次方）
 }
 
 // SyncTaskTable 表同步配置
