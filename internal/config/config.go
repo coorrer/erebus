@@ -66,8 +66,8 @@ type EnumMapping struct {
 
 // SetMapping SET 类型映射定义
 type SetMapping struct {
-	Const string `json:"const" yaml:"const"` // SET 常量值
-	Bit   int64  `json:"bit" yaml:"bit"`     // 对应的位值（2的幂次方）
+	Const string `json:"Const"` // SET 常量值
+	Bit   int64  `json:"Bit"`   // 对应的位值（2的幂次方）
 }
 
 // SyncTaskTable 表同步配置
