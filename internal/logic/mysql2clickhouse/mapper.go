@@ -165,8 +165,6 @@ func (m *FieldMapper) transformEnum(fieldName string, value interface{}) (string
 
 	// 查找枚举映射
 	if constValue, exists := enumMap[index]; exists {
-		logx.Debugf("Transformed enum field %s: MySQL index %d -> CH const '%s'",
-			fieldName, index, constValue)
 		return constValue, nil
 	}
 

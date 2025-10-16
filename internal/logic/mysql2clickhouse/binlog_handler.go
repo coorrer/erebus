@@ -762,7 +762,6 @@ func (h *BinlogHandler) writeBatch(batch []*RowData, tableData map[string][]map[
 						mu.Lock()
 						successCount += len(data)
 						mu.Unlock()
-						logx.Debugf("Successfully inserted %d rows into %s", len(data), tableKey)
 						break
 					}
 				}
@@ -1657,8 +1656,6 @@ func (h *BinlogHandler) OnXID(header *replication.EventHeader, nextPos mysql.Pos
 
 	if err != nil {
 		logx.Errorf("Failed to save position: %v", err)
-	} else {
-		logx.Debugf("Position saved: %s:%d", nextPos.Name, nextPos.Pos)
 	}
 
 	return nil
@@ -1689,8 +1686,6 @@ func (h *BinlogHandler) OnPosSynced(header *replication.EventHeader, pos mysql.P
 	)
 	if err != nil {
 		logx.Errorf("Failed to save position: %v", err)
-	} else {
-		logx.Debugf("Position saved: %s:%d", pos.Name, pos.Pos)
 	}
 
 	return nil
