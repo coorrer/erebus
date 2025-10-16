@@ -2,27 +2,28 @@ package mysql2clickhouse
 
 import (
 	"fmt"
-	"github.com/zeromicro/go-zero/core/logx"
 	"regexp"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/coorrer/erebus/internal/config"
+	"github.com/zeromicro/go-zero/core/logx"
 )
-
-// MappedData 映射后的数据
-type MappedData struct {
-	Columns []string
-	Rows    []map[string]interface{}
-}
 
 // FieldMapper 字段映射器
 type FieldMapper struct {
-	config          config.SyncTaskTable
-	transformers    map[string]func(interface{}) (interface{}, error)
-	enumMappings    map[string]map[string]int64 // field_name -> (source_value -> target_value)
-	reverseEnumMaps map[string]map[int64]string // field_name -> (target_value -> source_value) 用于反向查找
+	config       config.SyncTaskTable
+	transformers map[string]func(interface{}) (interface{}, error)
+
+	// 枚举映射：字段名 -> (MySQL索引 -> ClickHouse常量)
+	enumMappings map[string]map[int64]string
+
+	// 反向映射：字段名 -> (ClickHouse常量 -> MySQL索引)
+	reverseEnumMaps map[string]map[string]int64
+
+	// 默认值映射：字段名 -> 默认常量
+	defaultValues map[string]string
 }
 
 // NewFieldMapper 创建字段映射器
@@ -30,8 +31,9 @@ func NewFieldMapper(tableConfig config.SyncTaskTable) *FieldMapper {
 	mapper := &FieldMapper{
 		config:          tableConfig,
 		transformers:    make(map[string]func(interface{}) (interface{}, error)),
-		enumMappings:    make(map[string]map[string]int64),
-		reverseEnumMaps: make(map[string]map[int64]string),
+		enumMappings:    make(map[string]map[int64]string),
+		reverseEnumMaps: make(map[string]map[string]int64),
+		defaultValues:   make(map[string]string),
 	}
 
 	// 初始化内置转换器
@@ -42,32 +44,39 @@ func NewFieldMapper(tableConfig config.SyncTaskTable) *FieldMapper {
 	return mapper
 }
 
-// initEnumMappings 初始化枚举映射 - 只从ColumnMapping中读取
+// initEnumMappings 初始化枚举映射
 func (m *FieldMapper) initEnumMappings() {
-	// 只从列映射中初始化枚举映射
 	for _, mapping := range m.config.ColumnMappings {
-		// 判断 EnumMapping 是否不为空来确定是否是枚举字段
+		// 判断是否是枚举字段
 		if mapping.EnumMapping != nil && len(mapping.EnumMapping) > 0 {
-			enumMap := make(map[string]int64)
-			reverseMap := make(map[int64]string)
+			// 初始化枚举映射
+			enumMap := make(map[int64]string)
+			reverseMap := make(map[string]int64)
 
 			for _, enumDef := range mapping.EnumMapping {
-				enumMap[enumDef.Source] = enumDef.Target
-				reverseMap[enumDef.Target] = enumDef.Source
+				// 检查是否是默认值定义
+				if enumDef.Index == -1 {
+					m.defaultValues[mapping.Source] = enumDef.Const
+					logx.Infof("Set default value for enum field %s: %s", mapping.Source, enumDef.Const)
+					continue
+				}
+
+				// 正常枚举映射
+				enumMap[enumDef.Index] = enumDef.Const
+				reverseMap[enumDef.Const] = enumDef.Index
 			}
 
-			// 使用源字段名作为key
 			key := m.config.SourceDatabase + "." + m.config.SourceTable + "." + mapping.Source
 			m.enumMappings[key] = enumMap
 			m.reverseEnumMaps[key] = reverseMap
 
 			logx.Infof("Initialized enum mapping for field %s with %d mappings",
-				mapping.Source, len(mapping.EnumMapping))
+				mapping.Source, len(enumMap))
 		}
 	}
 }
 
-// MapRow 映射单行数据 - 支持通用枚举映射
+// MapRow 映射单行数据
 func (m *FieldMapper) MapRow(sourceRow map[string]interface{}) (map[string]interface{}, error) {
 	mappedRow := make(map[string]interface{})
 
@@ -140,75 +149,97 @@ func (m *FieldMapper) isEnumField(fieldName string) bool {
 	return exists
 }
 
-// transformEnum 通用枚举转换方法
-func (m *FieldMapper) transformEnum(fieldName string, value interface{}) (interface{}, error) {
+// transformEnum 枚举转换方法 - 直接从索引映射到常量
+func (m *FieldMapper) transformEnum(fieldName string, value interface{}) (string, error) {
 	key := m.config.SourceDatabase + "." + m.config.SourceTable + "." + fieldName
 	enumMap, exists := m.enumMappings[key]
 	if !exists {
-		return value, fmt.Errorf("no enum mapping found for field %s", fieldName)
+		return "", fmt.Errorf("no enum mapping found for field %s", fieldName)
 	}
 
-	// 将输入值转换为字符串进行匹配
-	strValue, err := m.valueToString(value)
+	// 将输入值转换为整数索引
+	index, err := m.valueToInt64(value)
 	if err != nil {
-		return value, fmt.Errorf("failed to convert value to string for enum field %s: %v", fieldName, err)
+		return "", fmt.Errorf("failed to convert value to int64 for enum field %s: %v", fieldName, err)
 	}
 
 	// 查找枚举映射
-	if enumValue, exists := enumMap[strValue]; exists {
-		logx.Debugf("Transformed enum field %s: %s -> %v", fieldName, strValue, enumValue)
-		return enumValue, nil
+	if constValue, exists := enumMap[index]; exists {
+		logx.Debugf("Transformed enum field %s: MySQL index %d -> CH const '%s'",
+			fieldName, index, constValue)
+		return constValue, nil
 	}
 
 	// 如果没有找到映射，尝试使用默认值
-	if defaultVal, exists := enumMap["__default__"]; exists {
-		logx.Errorf("Using default value for enum field %s: %s -> %v", fieldName, strValue, defaultVal)
+	if defaultVal, exists := m.defaultValues[fieldName]; exists {
+		logx.Errorf("Using default value for enum field %s: MySQL index %d -> CH const '%s'",
+			fieldName, index, defaultVal)
 		return defaultVal, nil
 	}
 
-	// 如果都没有找到，返回原始值并记录警告
-	logx.Errorf("No enum mapping found for value '%s' in field %s, using original value", strValue, fieldName)
-	return value, nil
+	// 如果都没有找到，返回错误
+	return "", fmt.Errorf("no enum mapping found for MySQL index %d in field %s", index, fieldName)
 }
 
-// valueToString 将任意值转换为字符串
-func (m *FieldMapper) valueToString(value interface{}) (string, error) {
+// valueToInt64 将任意值转换为int64
+func (m *FieldMapper) valueToInt64(value interface{}) (int64, error) {
 	switch v := value.(type) {
-	case string:
+	case int:
+		return int64(v), nil
+	case int8:
+		return int64(v), nil
+	case int16:
+		return int64(v), nil
+	case int32:
+		return int64(v), nil
+	case int64:
 		return v, nil
-	case []byte:
-		return string(v), nil
-	case int, int8, int16, int32, int64:
-		return fmt.Sprintf("%d", v), nil
-	case uint, uint8, uint16, uint32, uint64:
-		return fmt.Sprintf("%d", v), nil
-	case float32, float64:
-		return fmt.Sprintf("%f", v), nil
+	case uint:
+		return int64(v), nil
+	case uint8:
+		return int64(v), nil
+	case uint16:
+		return int64(v), nil
+	case uint32:
+		return int64(v), nil
+	case uint64:
+		return int64(v), nil
+	case float32:
+		return int64(v), nil
+	case float64:
+		return int64(v), nil
+	case string:
+		if v == "" {
+			return 0, nil
+		}
+		result, err := strconv.ParseInt(v, 10, 64)
+		if err != nil {
+			return 0, err
+		}
+		return result, nil
 	case bool:
 		if v {
-			return "true", nil
+			return 1, nil
 		}
-		return "false", nil
-	case nil:
-		return "", nil
+		return 0, nil
 	default:
-		return fmt.Sprintf("%v", value), nil
+		return 0, fmt.Errorf("cannot convert %T to int64", value)
 	}
 }
 
 // ReverseMapEnum 反向枚举映射（用于调试和日志）
-func (m *FieldMapper) ReverseMapEnum(fieldName string, targetValue int64) (string, error) {
+func (m *FieldMapper) ReverseMapEnum(fieldName string, constValue string) (int64, error) {
 	key := m.config.SourceDatabase + "." + m.config.SourceTable + "." + fieldName
 	reverseMap, exists := m.reverseEnumMaps[key]
 	if !exists {
-		return "", fmt.Errorf("no reverse enum mapping found for field %s", fieldName)
+		return 0, fmt.Errorf("no reverse enum mapping found for field %s", fieldName)
 	}
 
-	if sourceValue, exists := reverseMap[targetValue]; exists {
-		return sourceValue, nil
+	if index, exists := reverseMap[constValue]; exists {
+		return index, nil
 	}
 
-	return "", fmt.Errorf("no reverse mapping found for target value %v in field %s", targetValue, fieldName)
+	return 0, fmt.Errorf("no reverse mapping found for const value '%s' in field %s", constValue, fieldName)
 }
 
 // GetEnumMappingInfo 获取枚举映射信息（用于监控和调试）
@@ -245,25 +276,19 @@ func (m *FieldMapper) initTransformers() {
 		"trim":                    m.transformTrim,
 		"if":                      m.transformIf,
 		"default":                 m.transformDefault,
-		"toEnum":                  m.transformToEnum,      // 枚举转换器
-		"enum":                    m.transformEnumGeneric, // 通用枚举转换器
+		"toEnum":                  m.transformToEnum,
+		"enum":                    m.transformEnumGeneric,
 	}
 }
 
-// transformEnumGeneric 通用枚举转换器，可用于transform字段
 func (m *FieldMapper) transformEnumGeneric(value interface{}) (interface{}, error) {
-	// 这个转换器需要配合参数使用，例如：enum('field_name')
-	// 在实际使用中，需要通过更复杂的方式解析参数
 	return value, nil
 }
 
-// transformToEnum 枚举转换器（带字段名参数）
 func (m *FieldMapper) transformToEnum(value interface{}) (interface{}, error) {
-	// 这个转换器需要在调用时指定字段名
 	return value, nil
 }
 
-// 原有的转换方法保持不变
 func (m *FieldMapper) applyTransform(transform string, value interface{}) (interface{}, error) {
 	expr := strings.ReplaceAll(transform, "{{value}}", fmt.Sprintf("%v", value))
 
