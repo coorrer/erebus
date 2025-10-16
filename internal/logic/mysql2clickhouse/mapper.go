@@ -21,8 +21,8 @@ type MappedData struct {
 type FieldMapper struct {
 	config          config.SyncTaskTable
 	transformers    map[string]func(interface{}) (interface{}, error)
-	enumMappings    map[string]map[string]interface{} // field_name -> (source_value -> target_value)
-	reverseEnumMaps map[string]map[interface{}]string // field_name -> (target_value -> source_value) 用于反向查找
+	enumMappings    map[string]map[string]int64 // field_name -> (source_value -> target_value)
+	reverseEnumMaps map[string]map[int64]string // field_name -> (target_value -> source_value) 用于反向查找
 }
 
 // NewFieldMapper 创建字段映射器
@@ -30,8 +30,8 @@ func NewFieldMapper(tableConfig config.SyncTaskTable) *FieldMapper {
 	mapper := &FieldMapper{
 		config:          tableConfig,
 		transformers:    make(map[string]func(interface{}) (interface{}, error)),
-		enumMappings:    make(map[string]map[string]interface{}),
-		reverseEnumMaps: make(map[string]map[interface{}]string),
+		enumMappings:    make(map[string]map[string]int64),
+		reverseEnumMaps: make(map[string]map[int64]string),
 	}
 
 	// 初始化内置转换器
@@ -48,8 +48,8 @@ func (m *FieldMapper) initEnumMappings() {
 	for _, mapping := range m.config.ColumnMappings {
 		// 判断 EnumMapping 是否不为空来确定是否是枚举字段
 		if mapping.EnumMapping != nil && len(mapping.EnumMapping) > 0 {
-			enumMap := make(map[string]interface{})
-			reverseMap := make(map[interface{}]string)
+			enumMap := make(map[string]int64)
+			reverseMap := make(map[int64]string)
 
 			for _, enumDef := range mapping.EnumMapping {
 				enumMap[enumDef.Source] = enumDef.Target
@@ -197,7 +197,7 @@ func (m *FieldMapper) valueToString(value interface{}) (string, error) {
 }
 
 // ReverseMapEnum 反向枚举映射（用于调试和日志）
-func (m *FieldMapper) ReverseMapEnum(fieldName string, targetValue interface{}) (string, error) {
+func (m *FieldMapper) ReverseMapEnum(fieldName string, targetValue int64) (string, error) {
 	key := m.config.SourceDatabase + "." + m.config.SourceTable + "." + fieldName
 	reverseMap, exists := m.reverseEnumMaps[key]
 	if !exists {

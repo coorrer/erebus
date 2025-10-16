@@ -59,8 +59,8 @@ type ColumnMapping struct {
 
 // EnumMapping 枚举映射定义
 type EnumMapping struct {
-	Source string      `json:"Source"` // MySQL中的枚举字符串值
-	Target interface{} `json:"Target"` // 目标库中的枚举值（可以是int8, int16, string等）
+	Source string `json:"Source"` // MySQL中的枚举字符串值
+	Target int64  `json:"Target"` // 目标库中的枚举值
 }
 
 // SyncTaskTable 表同步配置
