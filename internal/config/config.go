@@ -54,7 +54,7 @@ type ColumnMapping struct {
 	Transform    string        `json:"Transform,optional"`
 	Ignore       bool          `json:"Ignore,default=false"`
 	Condition    string        `json:"Condition,optional"`
-	EnumMapping  []EnumMapping `json:"EnumMapping,omitempty"` // 通用枚举映射
+	EnumMapping  []EnumMapping `json:"EnumMapping,optional"` // 通用枚举映射
 }
 
 // EnumMapping 枚举映射定义
