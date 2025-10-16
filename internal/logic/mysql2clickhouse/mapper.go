@@ -245,8 +245,6 @@ func (m *FieldMapper) transformEnum(fieldName string, value interface{}) (string
 
 	// 查找枚举映射
 	if constValue, exists := enumMap[index]; exists {
-		logx.Debugf("Transformed enum field %s: index %d -> const '%s'",
-			fieldName, index, constValue)
 		return constValue, nil
 	}
 
@@ -301,7 +299,6 @@ func (m *FieldMapper) transformSet(fieldName string, value interface{}) (string,
 
 	// 返回逗号分隔的字符串
 	result := strings.Join(setValues, ",")
-	logx.Debugf("Transformed SET field %s: bitmap %d -> '%s'", fieldName, bitmap, result)
 	return result, nil
 }
 

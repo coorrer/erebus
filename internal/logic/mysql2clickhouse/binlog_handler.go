@@ -1667,8 +1667,6 @@ func (h *BinlogHandler) OnGTID(header *replication.EventHeader, gtidEvent mysql.
 
 // OnPosSynced Use your own way to sync position. When force is true, sync position immediately.
 func (h *BinlogHandler) OnPosSynced(header *replication.EventHeader, pos mysql.Position, set mysql.GTIDSet, force bool) error {
-	logx.Infof("Position synced: %s", pos)
-
 	mysqlSource := h.source
 	var gtid string
 	if set != nil {
