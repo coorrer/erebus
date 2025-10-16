@@ -177,7 +177,7 @@ func (m *FieldMapper) MapRow(sourceRow map[string]interface{}) (map[string]inter
 				return nil, fmt.Errorf("error transforming enum field %s: %v", mapping.Source, err)
 			}
 		} else if m.shouldTransformSet(mapping) {
-			// 只有当 Type 为 "setString" 时才进行 SET 转换
+			// 只有当 Type 为 "set2string" 时才进行 SET 转换
 			finalValue, err = m.transformSet(mapping.Source, sourceValue)
 			if err != nil {
 				return nil, fmt.Errorf("error transforming set field %s: %v", mapping.Source, err)
@@ -187,8 +187,8 @@ func (m *FieldMapper) MapRow(sourceRow map[string]interface{}) (map[string]inter
 			finalValue = sourceValue
 		}
 
-		// 类型转换（跳过 enum2string 和 setString 类型，因为已经在上面处理了）
-		if mapping.Type != "" && mapping.Type != "enum2string" && mapping.Type != "setString" {
+		// 类型转换（跳过 enum2string 和 set2string 类型，因为已经在上面处理了）
+		if mapping.Type != "" && mapping.Type != "enum2string" && mapping.Type != "set2string" {
 			finalValue, err = m.convertType(finalValue, mapping.Type)
 			if err != nil {
 				return nil, fmt.Errorf("error converting type for field %s: %v", mapping.Source, err)
@@ -210,8 +210,8 @@ func (m *FieldMapper) shouldTransformEnum(mapping config.ColumnMapping) bool {
 
 // shouldTransformSet 判断是否应该进行 SET 转换
 func (m *FieldMapper) shouldTransformSet(mapping config.ColumnMapping) bool {
-	// 只有当 Type 为 "setString" 并且有 SET 映射时才进行转换
-	return strings.ToLower(mapping.Type) == "setstring" &&
+	// 只有当 Type 为 "set2string" 并且有 SET 映射时才进行转换
+	return strings.ToLower(mapping.Type) == "set2string" &&
 		m.isSetField(mapping.Source)
 }
 
