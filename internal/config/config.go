@@ -46,14 +46,21 @@ const (
 
 // ColumnMapping 定义复杂列映射
 type ColumnMapping struct {
-	Source       string      `json:"Source"`
-	Target       string      `json:"Target"`
-	Type         string      `json:"Type,optional"`
-	DefaultValue interface{} `json:"DefaultValue,optional"`
-	Required     bool        `json:"Required,default=false"`
-	Transform    string      `json:"Transform,optional"`
-	Ignore       bool        `json:"Ignore,default=false"`
-	Condition    string      `json:"Condition,optional"`
+	Source       string        `json:"Source"`
+	Target       string        `json:"Target"`
+	Type         string        `json:"Type,optional"`
+	DefaultValue interface{}   `json:"DefaultValue,optional"`
+	Required     bool          `json:"Required,default=false"`
+	Transform    string        `json:"Transform,optional"`
+	Ignore       bool          `json:"Ignore,default=false"`
+	Condition    string        `json:"Condition,optional"`
+	EnumMapping  []EnumMapping `json:"EnumMapping,omitempty"` // 通用枚举映射
+}
+
+// EnumMapping 枚举映射定义
+type EnumMapping struct {
+	Source string      `json:"Source"` // MySQL中的枚举字符串值
+	Target interface{} `json:"Target"` // 目标库中的枚举值（可以是int8, int16, string等）
 }
 
 // SyncTaskTable 表同步配置
