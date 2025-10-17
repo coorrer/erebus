@@ -3,6 +3,7 @@ package mysql2clickhouse
 import (
 	"fmt"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -259,7 +260,7 @@ func (m *FieldMapper) transformEnum(fieldName string, value interface{}) (string
 	return "", fmt.Errorf("no enum mapping found for MySQL index %d in field %s", index, fieldName)
 }
 
-// transformSet SET 类型转换方法 - 将位图值转换为字符串
+// transformSet SET 类型转换方法 - 将位图值转换为字符串（按从低位到高位排序）
 func (m *FieldMapper) transformSet(fieldName string, value interface{}) (string, error) {
 	key := m.config.SourceDatabase + "." + m.config.SourceTable + "." + fieldName
 	setMap, exists := m.setMappings[key]
@@ -278,12 +279,25 @@ func (m *FieldMapper) transformSet(fieldName string, value interface{}) (string,
 		return "", nil
 	}
 
-	// 收集所有设置的位对应的常量
+	// 收集所有设置的位对应的常量，按位值从小到大排序
 	var setValues []string
-	for bit, constValue := range setMap {
+
+	// 首先提取所有的位值并排序
+	bits := make([]int64, 0, len(setMap))
+	for bit := range setMap {
+		bits = append(bits, bit)
+	}
+
+	// 对位值进行排序（从小到大）
+	sort.Slice(bits, func(i, j int) bool {
+		return bits[i] < bits[j]
+	})
+
+	// 按照排序后的位值顺序检查哪些位被设置
+	for _, bit := range bits {
 		// 检查该位是否被设置
 		if bitmap&bit != 0 {
-			setValues = append(setValues, constValue)
+			setValues = append(setValues, setMap[bit])
 		}
 	}
 
