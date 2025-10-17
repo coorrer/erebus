@@ -740,7 +740,7 @@ func (h *BinlogHandler) writeBatch(batch []*RowData, tableData map[string][]map[
 					mu.Lock()
 					errorCount += len(data)
 					mu.Unlock()
-					h.moveToDeadLetterQueueForTable(batch, tableKey, fmt.Errorf("no config found for table: %s"))
+					h.moveToDeadLetterQueueForTable(batch, tableKey, fmt.Errorf("no config found for table: %s", tableKey))
 					return
 				}
 
@@ -883,7 +883,7 @@ func (h *BinlogHandler) executeDeletes(batch []*RowData, tableDeletes map[string
 			if mapper == nil {
 				logx.Errorf("No mapper found for table: %s", tableKey)
 				errorCount += len(deletes)
-				h.moveToDeadLetterQueueForTable(batch, tableKey, fmt.Errorf("no mapper found for table: %s"))
+				h.moveToDeadLetterQueueForTable(batch, tableKey, fmt.Errorf("no mapper found for table: %s", tableKey))
 				continue
 			}
 
